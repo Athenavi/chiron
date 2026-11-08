@@ -10,17 +10,28 @@
  *  - 表单回填的是「当前真正生效」的值（DB 覆盖环境变量的结果），
  *    因此不会出现"页面显示一套、实际跑另一套"。
  */
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import {
   Card, Tabs, TabPane, Form, FormItem, Input, InputPassword, Switch,
   Button, Alert, Tag, message,
 } from 'ant-design-vue'
 import { ReloadOutlined, SaveOutlined } from '@ant-design/icons-vue'
-import { getPaymentConfig, savePaymentConfig, type PaymentChannelStatus } from '@/api/admin'
+import {
+  getPaymentConfig,
+  getTenantPaymentConfig,
+  savePaymentConfig,
+  saveTenantPaymentConfig,
+  type PaymentChannelStatus,
+} from '@/api/admin'
 import { describeApiError } from '@/utils/apiError'
 
 import { useI18n } from 'vue-i18n'
 const { t } = useI18n()
+const route = useRoute()
+// /tenant/payment 走租户级接口（本租户一套凭据）；/admin/payment 已下线，
+// 但保留平台接口调用能力给仍有权限的 owner 排查问题。
+const isTenantArea = computed(() => route.path.startsWith('/tenant'))
 
 /** 渠道 Tab 顺序与后端 paymentChannels 一致 */
 const CHANNEL_TABS = [
@@ -106,7 +117,7 @@ function missingText(channel: string): string {
 async function load() {
   loading.value = true
   try {
-    const res = await getPaymentConfig()
+    const res = isTenantArea.value ? await getTenantPaymentConfig() : await getPaymentConfig()
     mergeConfig(res.config ?? {})
     channels.value = res.channels ?? {}
     callbackUrls.value = res.callback_urls ?? {}
@@ -120,7 +131,9 @@ async function load() {
 async function save() {
   saving.value = true
   try {
-    const res = await savePaymentConfig(config.value)
+    const res = isTenantArea.value
+      ? await saveTenantPaymentConfig(config.value)
+      : await savePaymentConfig(config.value)
     // 用服务端生效结果回填：被拒绝/未生效的字段能立刻看出来
     mergeConfig(res.config ?? {})
     channels.value = res.channels ?? {}

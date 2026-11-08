@@ -120,10 +120,23 @@ func IsSensitive(key string) bool {
 	return false
 }
 
-// SaveConfig 将某分类的 config 逐键 upsert 到 system_settings。
+// SaveConfig 将某分类的 config 逐键 upsert 到**全局**设置（tenant_id=0）。
 //   - val 为 nil：删除该键（回落 env/默认值）
 //   - 敏感键且 aead 可用：加密后落库，标记 encrypted=true
 func (s *Store) SaveConfig(ctx context.Context, category string, config map[string]interface{}, userID string) error {
+	return s.saveConfig(ctx, 0, category, config, userID)
+}
+
+// SaveTenantConfig 保存**租户级**配置（tenant_id>0）：同一张表、同一套加密，
+// 靠 tenant_id 隔离。支付渠道等"每租户一套"的配置走这里。
+func (s *Store) SaveTenantConfig(ctx context.Context, tenantID int, category string, config map[string]interface{}, userID string) error {
+	if tenantID <= 0 {
+		return errors.New("tenant id required")
+	}
+	return s.saveConfig(ctx, tenantID, category, config, userID)
+}
+
+func (s *Store) saveConfig(ctx context.Context, tenantID int, category string, config map[string]interface{}, userID string) error {
 	if s.pool == nil {
 		return errors.New("database unavailable")
 	}
@@ -136,8 +149,8 @@ func (s *Store) SaveConfig(ctx context.Context, category string, config map[stri
 	for key, val := range config {
 		if val == nil {
 			if _, err := tx.Exec(ctx,
-				`DELETE FROM system_settings WHERE category=$1 AND key=$2`,
-				category, key); err != nil {
+				`DELETE FROM system_settings WHERE tenant_id=$1 AND category=$2 AND key=$3`,
+				tenantID, category, key); err != nil {
 				return err
 			}
 			continue
@@ -183,28 +196,66 @@ func (s *Store) SaveConfig(ctx context.Context, category string, config map[stri
 		if _, err := tx.Exec(ctx,
 			`WITH updated AS (
 			     UPDATE system_settings
-			        SET value=$3::jsonb, encrypted=$4, updated_by=$5, updated_at=NOW()
-			      WHERE category=$1 AND key=$2
+			        SET value=$4::jsonb, encrypted=$5, updated_by=$6, updated_at=NOW()
+			      WHERE tenant_id=$1 AND category=$2 AND key=$3
 			     RETURNING 1
 			 )
-			 INSERT INTO system_settings (category, key, value, encrypted, updated_by, updated_at)
-			 SELECT $1, $2, $3::jsonb, $4, $5, NOW()
+			 INSERT INTO system_settings (tenant_id, category, key, value, encrypted, updated_by, updated_at)
+			 SELECT $1, $2, $3, $4::jsonb, $5, $6, NOW()
 			  WHERE NOT EXISTS (SELECT 1 FROM updated)`,
-			category, key, value, encrypted, nullableUser(userID)); err != nil {
+			tenantID, category, key, value, encrypted, nullableUser(userID)); err != nil {
 			return fmt.Errorf("upsert setting %s/%s: %w", category, key, err)
 		}
 	}
 	return tx.Commit(ctx)
 }
 
-// LoadConfig 读取某分类全部配置，敏感值解密后返回（面向管理员，需鉴权）。
+// LoadConfig 读取**全局**（tenant_id=0）某分类全部配置，敏感值解密后返回。
 func (s *Store) LoadConfig(ctx context.Context, category string) (map[string]interface{}, error) {
+	return s.loadConfig(ctx, 0, category)
+}
+
+// LoadTenantConfig 读取某租户的配置；未配置时返回空 map（调用方可回退全局）。
+func (s *Store) LoadTenantConfig(ctx context.Context, tenantID int, category string) (map[string]interface{}, error) {
+	if tenantID <= 0 {
+		return map[string]interface{}{}, nil
+	}
+	return s.loadConfig(ctx, tenantID, category)
+}
+
+// TenantIDsWithConfig 返回在某分类下拥有独立配置的租户（tenant_id > 0）。
+//
+// 支付回调（微信 V3）的请求体是加密的，验签前拿不到订单号，无法按单反查租户。
+// 回调入口因此需要"候选客户端"集合：全局 + 每个单独配置过该分类的租户。
+func (s *Store) TenantIDsWithConfig(ctx context.Context, category string) ([]int, error) {
+	out := []int{}
+	if s.pool == nil {
+		return out, nil
+	}
+	rows, err := s.pool.Query(ctx,
+		`SELECT DISTINCT tenant_id FROM system_settings
+		  WHERE category = $1 AND tenant_id > 0
+		  ORDER BY tenant_id`, category)
+	if err != nil {
+		return out, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int
+		if err := rows.Scan(&id); err == nil {
+			out = append(out, id)
+		}
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) loadConfig(ctx context.Context, tenantID int, category string) (map[string]interface{}, error) {
 	out := map[string]interface{}{}
 	if s.pool == nil {
 		return out, nil
 	}
 	rows, err := s.pool.Query(ctx,
-		`SELECT key, value, encrypted FROM system_settings WHERE category=$1`, category)
+		`SELECT key, value, encrypted FROM system_settings WHERE tenant_id=$1 AND category=$2`, tenantID, category)
 	if err != nil {
 		return out, err
 	}

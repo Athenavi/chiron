@@ -14,16 +14,25 @@ import (
 
 // GetConfig GET /v1/ent/mail/config（secret 脱敏）。
 func (h *MailHandler) GetConfig(w http.ResponseWriter, r *http.Request) {
-	row, err := h.loadConfig(r.Context())
+	tenantID := mailConfigTenantID(r)
+	row, usingDefault, err := h.loadConfigForTenant(r.Context(), tenantID)
 	if err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, ErrDBUnavailable)
 		return
 	}
 	if row == nil {
-		OK(w, h.configResponse(defaultMailConfigRow(), false))
+		OK(w, h.configResponse(defaultMailConfigRow(), false, usingDefault))
 		return
 	}
-	OK(w, h.configResponse(row, true))
+	OK(w, h.configResponse(row, true, usingDefault))
+}
+
+// mailConfigTenantID 取当前管理员所属租户；缺省平台租户。
+func mailConfigTenantID(r *http.Request) int16 {
+	if claims := auth.GetClaims(r.Context()); claims != nil && claims.TenantID > 0 {
+		return claims.TenantID
+	}
+	return db.DefaultTenantID
 }
 
 // defaultMailConfigRow 返回管理端表单缺省值（不含任何厂商域名）。
@@ -41,7 +50,7 @@ func defaultMailConfigRow() *mailConfigRow {
 	}
 }
 
-func (h *MailHandler) configResponse(row *mailConfigRow, exists bool) map[string]any {
+func (h *MailHandler) configResponse(row *mailConfigRow, exists bool, usingDefault bool) map[string]any {
 	secret := ""
 	if row.SMTPPasswordEnc != "" {
 		secret = maskedSecret
@@ -84,6 +93,7 @@ func (h *MailHandler) configResponse(row *mailConfigRow, exists bool) map[string
 		"daily_limit":           row.DailyLimit,
 		"timeout_seconds":       row.TimeoutSeconds,
 		"exists":                exists,
+		"using_default":         usingDefault,
 	}
 }
 
@@ -136,7 +146,10 @@ func (h *MailHandler) UpdateConfig(w http.ResponseWriter, r *http.Request) {
 		BadRequest(w, ErrInvalidReq)
 		return
 	}
-	existing, err := h.loadConfig(r.Context())
+	tenantID := mailConfigTenantID(r)
+	// 首次保存时以平台配置为基底（未配置租户的 GET 也是回退平台），
+	// 保存后该租户拥有独立的一份。
+	existing, _, err := h.loadConfigForTenant(r.Context(), tenantID)
 	if err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, ErrDBUnavailable)
 		return
@@ -242,11 +255,11 @@ func (h *MailHandler) UpdateConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := h.saveConfig(r.Context(), row); err != nil {
+	if err := h.saveConfig(r.Context(), tenantID, row); err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, ErrDBUnavailable)
 		return
 	}
-	updated, err := h.loadConfig(r.Context())
+	updated, _, err := h.loadConfigForTenant(r.Context(), tenantID)
 	if err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, ErrDBUnavailable)
 		return
@@ -256,7 +269,7 @@ func (h *MailHandler) UpdateConfig(w http.ResponseWriter, r *http.Request) {
 			http.StatusInternalServerError, "mail config unavailable")
 		return
 	}
-	OK(w, h.configResponse(updated, true))
+	OK(w, h.configResponse(updated, true, false))
 }
 
 type mailTestRequest struct {
@@ -276,7 +289,7 @@ func (h *MailHandler) SendTest(w http.ResponseWriter, r *http.Request) {
 		BadRequest(w, "invalid email address")
 		return
 	}
-	row, err := h.loadConfig(r.Context())
+	row, _, err := h.loadConfigForTenant(r.Context(), mailConfigTenantID(r))
 	if err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, ErrDBUnavailable)
 		return

@@ -225,6 +225,7 @@ const mediaSearchQuery = ref('')
 const kbId = route.params.id as string
 
 onMounted(async () => {
+  void loadKbProvider()
   await loadKnowledgeBase()
   await loadDocuments()
 })
@@ -261,10 +262,45 @@ const filteredMediaFiles = computed(() => {
 })
 
 // 上传文档：全局分片（purpose kb_doc → complete 落 knowledge_documents）
+//
+// 精确白名单由 provider 决定：自托管（PageIndex local）只吃 PDF，Cloud 还接受
+// Word/PowerPoint（见 python-engine/app/knowledge/remote.py 的 _LOCAL_SUFFIXES /
+// _CLOUD_SUFFIXES）。这里按**当前用户设置**在选完文件时就拦，避免分片传完才被引擎拒绝。
+const KB_CLOUD_DOC_EXTENSIONS = ['pdf', 'docx', 'doc', 'pptx', 'ppt']
+const kbProvider = ref<'selfhosted' | 'cloud'>('selfhosted')
+
+const allowedKbExtensions = computed(() =>
+  kbProvider.value === 'cloud' ? KB_CLOUD_DOC_EXTENSIONS : ['pdf'],
+)
+const kbDocAccept = computed(() => allowedKbExtensions.value.map(e => `.${e}`).join(','))
+const kbDocTypesLabel = computed(() =>
+  kbProvider.value === 'cloud' ? 'PDF / DOCX / DOC / PPTX / PPT' : 'PDF',
+)
+
+function fileExtension(name: string): string {
+  const i = name.lastIndexOf('.')
+  return i >= 0 ? name.slice(i + 1).toLowerCase() : ''
+}
+
+/** 读取 provider：读不到时按自托管（更严格的 PDF-only）处理。 */
+async function loadKbProvider() {
+  try {
+    const res = await api.get('/v1/kb/settings')
+    const p = String(res.data?.data?.provider || '')
+    if (p === 'cloud' || p === 'selfhosted') kbProvider.value = p
+  } catch {
+    // 设置未初始化 / 引擎不可用：保持 selfhosted，宁可少放行也不要白传
+  }
+}
+
 async function handleUpload(info: UploadRequestOptions) {
   // antd 的 file 允许多态（string/Blob，用于受控 fileList）；本视图只接真实上传文件
   const { file } = info
   if (!(file instanceof File)) return
+  if (!allowedKbExtensions.value.includes(fileExtension(file.name))) {
+    message.error(t('knowledge.unsupported_file_type', { types: kbDocTypesLabel.value }))
+    return
+  }
   try {
     const handle = await createChunkUpload(file, { purpose: 'kb_doc', parentId: kbId })
     await handle.done
@@ -618,7 +654,7 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
               <Upload
                 :show-upload-list="false"
                 :custom-request="handleUpload"
-                accept=".pdf,.md,.txt,.csv,.docx"
+                :accept="kbDocAccept"
               >
                 <Button
                   type="primary"

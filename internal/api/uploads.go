@@ -2,7 +2,9 @@ package api
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -16,6 +18,7 @@ import (
 
 	"github.com/athenavi/chiron/internal/auth"
 	"github.com/athenavi/chiron/internal/db"
+	"github.com/athenavi/chiron/internal/engine"
 	"github.com/athenavi/chiron/internal/id"
 	"github.com/athenavi/chiron/internal/storage"
 )
@@ -35,16 +38,32 @@ type UploadHandler struct {
 	storageRoot string
 	// store 分片与最终对象的持久化后端（多副本下状态共享）
 	store *storage.AtomicStore
+	// pythonClient 用于把知识库文档交给引擎落库（原文进对象存储 + storage_key）。
+	// 为 nil 时 kb_doc 上传返回 503 —— 引擎不可用不该表现为"内部错误"。
+	pythonClient *engine.PythonClient
 }
 
-func NewUploadHandler(a *auth.Authenticator, storageRoot string, store *storage.AtomicStore) *UploadHandler {
-	return &UploadHandler{authenticator: a, storageRoot: storageRoot, store: store}
+func NewUploadHandler(a *auth.Authenticator, storageRoot string, store *storage.AtomicStore, py *engine.PythonClient) *UploadHandler {
+	return &UploadHandler{authenticator: a, storageRoot: storageRoot, store: store, pythonClient: py}
 }
 
 const defaultChunkSize = 2 << 20 // 2MB
 
 // maxKBDocSize 限制 kb_doc 文档大小（防 finalizeKBDoc 整文件读入内存导致 OOM）。
 const maxKBDocSize int64 = 64 << 20 // 64MB
+
+// kbDocAllowedExts 是知识库文档允许的扩展名**并集**。
+//
+// 精确白名单在引擎侧按用户 provider 决定（`provider.supports`：自托管只吃 PDF，
+// Cloud 还接受 Word/PowerPoint）。这里用并集在**上传开始前**先挡掉明显不支持的类型，
+// 避免用户把几十 MB 传完才收到 400 —— 那是"失败但白干"。
+var kbDocAllowedExts = map[string]bool{
+	".pdf":  true,
+	".docx": true,
+	".doc":  true,
+	".pptx": true,
+	".ppt":  true,
+}
 
 // validUploadNameRe 用于文件名净化：拒绝路径分隔符与目录穿越序列。
 // 仅允许字母数字、中文等常规字符、点、下划线、连字符、空格。
@@ -158,6 +177,16 @@ func (h *UploadHandler) Init(w http.ResponseWriter, r *http.Request) {
 	if body.Purpose == "kb_doc" && body.Size > maxKBDocSize {
 		BadRequest(w, "kb_doc upload too large (max 64MB)")
 		return
+	}
+	// 知识库文档类型门禁：在收第一个分片之前就拒，而不是传完再拒。
+	// 精确校验（按 provider）仍在引擎侧；这里只做「显然不支持」的前置拦截。
+	if body.Purpose == "kb_doc" {
+		ext := strings.ToLower(filepath.Ext(body.Name))
+		if !kbDocAllowedExts[ext] {
+			BadRequest(w, "unsupported knowledge document type: "+
+				strings.TrimPrefix(ext, ".")+" (allowed: pdf, docx, doc, pptx, ppt)")
+			return
+		}
 	}
 	chunkSize := body.ChunkSize
 	if chunkSize <= 0 {
@@ -367,6 +396,13 @@ func (h *UploadHandler) Complete(w http.ResponseWriter, r *http.Request) {
 		fileURL, err = h.finalizeGeneric(up, stream)
 	}
 	if err != nil {
+		// 引擎返回的状态码原样透传：4xx（类型不支持/403/404）与 503（知识库服务未配置）
+		// 都带可操作文案；折叠成 500 会让用户看到无从下手的「内部错误」。
+		var httpErr *engine.HTTPError
+		if errors.As(err, &httpErr) {
+			JSON(w, httpErr.StatusCode, APIResponse{Success: false, Error: httpErr.UserMessage()})
+			return
+		}
 		logAndRespond(w, err, http.StatusInternalServerError, "finalize upload failed")
 		return
 	}
@@ -508,7 +544,14 @@ func (h *UploadHandler) finalizeMedia(r *http.Request, tenantID string, up struc
 	return assetID, "/" + objectKey, nil
 }
 
-// finalizeKBDoc 合并文件内容落 knowledge_documents（content bytea 供 RAG 构建，按当前租户）。
+// finalizeKBDoc 把合并后的文档交给 Python 引擎落库（原文进对象存储 + storage_key）。
+//
+// 为什么不在 Go 侧直接写 knowledge_documents：该表已改为「原文不进 PG」——
+// 只留 storage_key，字节放对象存储（见 python-engine/app/knowledge/blob.py）。
+// 旧实现仍写 content bytea，上传完成时直接撞
+// `column "content" of relation "knowledge_documents" does not exist`（500）。
+// 原文存储、provider 类型校验、KB 统计刷新在引擎侧只实现一份，Go 只负责分片合并与
+// 转发 —— 两边各写一遍必然再次漂移（这次就是）。
 func (h *UploadHandler) finalizeKBDoc(r *http.Request, tenantID string, up struct {
 	ID        string
 	UserID    string
@@ -525,7 +568,21 @@ func (h *UploadHandler) finalizeKBDoc(r *http.Request, tenantID string, up struc
 	if up.ParentID == "" {
 		return "", fmt.Errorf("kb_doc upload requires parent_id (kb_id)")
 	}
-	// 校验 KB 存在且归属当前租户当前用户
+	if h.pythonClient == nil {
+		return "", &engine.HTTPError{
+			Method: http.MethodPost, Path: "/v1/kb", StatusCode: http.StatusServiceUnavailable,
+			Body: []byte(`{"detail":"python engine not available"}`),
+		}
+	}
+	ext := strings.ToLower(filepath.Ext(up.Name))
+	if !kbDocAllowedExts[ext] {
+		return "", &engine.HTTPError{
+			Method: http.MethodPost, Path: "/v1/kb", StatusCode: http.StatusBadRequest,
+			Body: []byte(fmt.Sprintf(`{"detail":"unsupported knowledge document type: %s (allowed: pdf, docx, doc, pptx, ppt)"}`,
+				strings.TrimPrefix(ext, "."))),
+		}
+	}
+	// 校验 KB 存在且归属当前租户/用户（引擎侧还会再校验一次，这里先给出更快的 404）
 	var owner string
 	if err := db.GlobalDBManager.QueryRow(r.Context(),
 		`SELECT user_id FROM knowledge_bases WHERE id = $1 AND tenant_id = $2`, up.ParentID, tenantID).Scan(&owner); err != nil || owner != up.UserID {
@@ -538,28 +595,24 @@ func (h *UploadHandler) finalizeKBDoc(r *http.Request, tenantID string, up struc
 	if int64(len(content)) > maxKBDocSize {
 		return "", fmt.Errorf("kb_doc content exceeds 64MB limit")
 	}
-	ext := strings.TrimPrefix(filepath.Ext(up.Name), ".")
-	if ext == "" {
-		ext = "txt"
+	// 引擎的 POST /v1/kb/{id}/documents 吃 JSON + base64 原文；落库时写 storage_key。
+	body := map[string]any{
+		"name":            up.Name,
+		"file_type":       strings.TrimPrefix(ext, "."),
+		"file_size_bytes": len(content),
+		"content":         base64.StdEncoding.EncodeToString(content),
 	}
-	docID, err := id.UUID()
-	if err != nil {
+	var resp struct {
+		ID string `json:"id"`
+	}
+	path := "/v1/kb/" + up.ParentID + "/documents?user_id=" + up.UserID + "&tenant_id=" + tenantID
+	if err := h.pythonClient.PostJSON(r.Context(), path, body, &resp); err != nil {
 		return "", err
 	}
-	_, err = db.GlobalDBManager.Exec(r.Context(),
-		`INSERT INTO knowledge_documents (id, tenant_id, knowledge_base_id, user_id, name, file_type, file_size_bytes, status, content, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', $8, NOW(), NOW())`,
-		docID, tenantID, up.ParentID, up.UserID, up.Name, ext, up.Size, content)
-	if err != nil {
-		return "", err
+	if resp.ID == "" {
+		return "", fmt.Errorf("knowledge engine returned no document id")
 	}
-	// 重算 KB 统计（带 tenant_id 限制）
-	_, _ = db.GlobalDBManager.Exec(r.Context(),
-		`UPDATE knowledge_bases
-		 SET document_count = (SELECT COUNT(*) FROM knowledge_documents WHERE knowledge_base_id = $1 AND tenant_id = $2),
-		     total_size_bytes = COALESCE((SELECT SUM(file_size_bytes) FROM knowledge_documents WHERE knowledge_base_id = $1 AND tenant_id = $2), 0),
-		     updated_at = NOW() WHERE id = $1 AND tenant_id = $2`, up.ParentID, tenantID)
-	return fmt.Sprintf("/kb/%s/documents/%s", up.ParentID, docID), nil
+	return fmt.Sprintf("/kb/%s/documents/%s", up.ParentID, resp.ID), nil
 }
 
 // finalizeGeneric 合并文件写入通用目录并返回可访问 URL。

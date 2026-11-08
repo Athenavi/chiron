@@ -57,11 +57,9 @@ func (h *EntIdentityHandler) scanRole(ctx context.Context, id string, withUserCo
 
 // ListRoles GET /v1/ent/roles
 func (h *EntIdentityHandler) ListRoles(w http.ResponseWriter, r *http.Request) {
-	scope, isOwner := entTenantScope(auth.GetClaims(r.Context()))
-	if !isOwner && scope == "" {
-		Forbidden(w, "tenant context missing")
-		return
-	}
+	// 列表固定**当前租户**：owner 的 entTenantScope 是空串（可跨租户），照搬会把
+	// 别家租户的 owner/admin/member 一并列出 —— 界面上就是"多个同名角色"。
+	scope := entCurrentTenantScope(auth.GetClaims(r.Context()))
 	rows, err := h.db.Query(r.Context(),
 		`SELECT r.id FROM ent_roles r WHERE ($1 = '' OR r.tenant_id::text = $1) ORDER BY r.is_builtin DESC, r.name`,
 		scope)

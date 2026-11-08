@@ -358,6 +358,8 @@ export interface MailAdminConfig {
   daily_limit: number
   timeout_seconds: number
   exists?: boolean
+  /** true = 本租户尚未单独配置，当前回退平台默认 SMTP */
+  using_default?: boolean
 }
 
 export async function getMailAdminConfig(): Promise<MailAdminConfig> {

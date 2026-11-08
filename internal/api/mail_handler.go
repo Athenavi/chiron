@@ -185,7 +185,7 @@ func (h *MailHandler) SendWelcomeAsync(email, name string) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		row, err := h.loadConfig(ctx)
+		row, err := h.loadConfigForEmail(ctx, email)
 		if err != nil {
 			slog.Warn("welcome mail: load config failed", "error", err)
 			return
@@ -428,52 +428,93 @@ const mailConfigColumns = `provider, enabled, smtp_host, smtp_port, smtp_usernam
 	code_ttl_seconds, send_interval_seconds, daily_limit, timeout_seconds`
 
 func (h *MailHandler) loadConfig(ctx context.Context) (*mailConfigRow, error) {
-	var row mailConfigRow
-	var smtpHost, smtpUser, smtpPassword, smtpSecurity, apiBaseURL, apiKey *string
-	var fromAddress, fromName, replyTo, siteName, appBaseURL *string
-	var codeSubject, codeBody, welcomeSubject, welcomeBody, resetSubject, resetBody *string
-	err := h.db.QueryRow(ctx,
-		`SELECT `+mailConfigColumns+` FROM ent_mail_config WHERE tenant_id = $1`,
-		db.DefaultTenantID).
-		Scan(&row.Provider, &row.Enabled, &smtpHost, &row.SMTPPort, &smtpUser, &smtpPassword,
-			&smtpSecurity, &row.SMTPSkipVerify, &apiBaseURL, &apiKey, &row.APIChannelID, &row.APITemplateID,
-			&fromAddress, &fromName, &replyTo, &siteName, &appBaseURL,
-			&row.LoginEnabled, &row.RegisterVerify, &row.AutoRegister, &row.ResetEnabled, &row.WelcomeEnabled,
-			&codeSubject, &codeBody, &welcomeSubject, &welcomeBody, &resetSubject, &resetBody,
-			&row.CodeTTLSeconds, &row.SendIntervalSecs, &row.DailyLimit, &row.TimeoutSeconds)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	row.SMTPHost = derefString(smtpHost)
-	row.SMTPUsername = derefString(smtpUser)
-	row.SMTPPasswordEnc = derefString(smtpPassword)
-	row.SMTPSecurity = derefString(smtpSecurity)
-	if row.SMTPSecurity == "" {
-		row.SMTPSecurity = auth.MailSecurityStartTLS
-	}
-	row.APIBaseURL = derefString(apiBaseURL)
-	row.APIKeyEnc = derefString(apiKey)
-	row.FromAddress = derefString(fromAddress)
-	row.FromName = derefString(fromName)
-	row.ReplyTo = derefString(replyTo)
-	row.SiteName = derefString(siteName)
-	row.AppBaseURL = derefString(appBaseURL)
-	row.CodeSubject = derefString(codeSubject)
-	row.CodeBody = derefString(codeBody)
-	row.WelcomeSubject = derefString(welcomeSubject)
-	row.WelcomeBody = derefString(welcomeBody)
-	row.ResetSubject = derefString(resetSubject)
-	row.ResetBody = derefString(resetBody)
-	return &row, nil
+	row, _, err := h.loadConfigForTenant(ctx, db.DefaultTenantID)
+	return row, err
 }
 
-func (h *MailHandler) saveConfig(ctx context.Context, row *mailConfigRow) error {
+// loadConfigForTenant 读取某租户的邮件配置；租户未单独配置时回退平台默认。
+//
+// usingDefault=true 表示返回的是平台配置（租户后台据此提示"正在使用平台 SMTP"）。
+func (h *MailHandler) loadConfigForTenant(ctx context.Context, tenantID int16) (*mailConfigRow, bool, error) {
+	load := func(id int16) (*mailConfigRow, error) {
+		var row mailConfigRow
+		var smtpHost, smtpUser, smtpPassword, smtpSecurity, apiBaseURL, apiKey *string
+		var fromAddress, fromName, replyTo, siteName, appBaseURL *string
+		var codeSubject, codeBody, welcomeSubject, welcomeBody, resetSubject, resetBody *string
+		err := h.db.QueryRow(ctx,
+			`SELECT `+mailConfigColumns+` FROM ent_mail_config WHERE tenant_id = $1`, id).
+			Scan(&row.Provider, &row.Enabled, &smtpHost, &row.SMTPPort, &smtpUser, &smtpPassword,
+				&smtpSecurity, &row.SMTPSkipVerify, &apiBaseURL, &apiKey, &row.APIChannelID, &row.APITemplateID,
+				&fromAddress, &fromName, &replyTo, &siteName, &appBaseURL,
+				&row.LoginEnabled, &row.RegisterVerify, &row.AutoRegister, &row.ResetEnabled, &row.WelcomeEnabled,
+				&codeSubject, &codeBody, &welcomeSubject, &welcomeBody, &resetSubject, &resetBody,
+				&row.CodeTTLSeconds, &row.SendIntervalSecs, &row.DailyLimit, &row.TimeoutSeconds)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		row.SMTPHost = derefString(smtpHost)
+		row.SMTPUsername = derefString(smtpUser)
+		row.SMTPPasswordEnc = derefString(smtpPassword)
+		row.SMTPSecurity = derefString(smtpSecurity)
+		if row.SMTPSecurity == "" {
+			row.SMTPSecurity = auth.MailSecurityStartTLS
+		}
+		row.APIBaseURL = derefString(apiBaseURL)
+		row.APIKeyEnc = derefString(apiKey)
+		row.FromAddress = derefString(fromAddress)
+		row.FromName = derefString(fromName)
+		row.ReplyTo = derefString(replyTo)
+		row.SiteName = derefString(siteName)
+		row.AppBaseURL = derefString(appBaseURL)
+		row.CodeSubject = derefString(codeSubject)
+		row.CodeBody = derefString(codeBody)
+		row.WelcomeSubject = derefString(welcomeSubject)
+		row.WelcomeBody = derefString(welcomeBody)
+		row.ResetSubject = derefString(resetSubject)
+		row.ResetBody = derefString(resetBody)
+		return &row, nil
+	}
+
+	if tenantID != db.DefaultTenantID {
+		row, err := load(tenantID)
+		if err != nil {
+			return nil, false, err
+		}
+		if row != nil {
+			return row, false, nil
+		}
+	}
+	row, err := load(db.DefaultTenantID)
+	if err != nil {
+		return nil, false, err
+	}
+	return row, tenantID != db.DefaultTenantID, nil
+}
+
+// loadConfigForEmail 按收件人邮箱反查其所属租户，并取该租户的邮件配置。
+//
+// 验证码/重置/欢迎邮件都是"发给某个用户"的：应使用该用户租户配置的 SMTP，
+// 租户未配置时自动回退平台默认。邮箱查不到（如注册前的邮箱验证）走平台默认。
+func (h *MailHandler) loadConfigForEmail(ctx context.Context, email string) (*mailConfigRow, error) {
+	tenantID := db.DefaultTenantID
+	if email != "" {
+		var tid int16
+		if err := h.db.QueryRow(ctx,
+			`SELECT tenant_id FROM users WHERE lower(email) = lower($1) LIMIT 1`, email).Scan(&tid); err == nil {
+			tenantID = tid
+		}
+	}
+	row, _, err := h.loadConfigForTenant(ctx, tenantID)
+	return row, err
+}
+
+func (h *MailHandler) saveConfig(ctx context.Context, tenantID int16, row *mailConfigRow) error {
 	args := pgx.NamedArgs{
 		"id":                    newUUID(),
-		"tenant_id":             db.DefaultTenantID,
+		"tenant_id":             tenantID,
 		"provider":              row.Provider,
 		"enabled":               row.Enabled,
 		"smtp_host":             nullString(row.SMTPHost),

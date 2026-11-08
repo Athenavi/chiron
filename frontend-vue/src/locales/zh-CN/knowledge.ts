@@ -49,6 +49,7 @@ export default {
   document_management: "文档管理",
   document_content_preview: "文档内容预览",
   document_uploaded_successfully: "文档上传成功",
+  unsupported_file_type: "不支持该文件类型，仅支持 {types}。",
   documents: "文档数",
   document_preview: "文档预览",
   my_knowledge_base: "我的知识库",

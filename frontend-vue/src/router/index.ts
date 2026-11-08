@@ -172,13 +172,6 @@ const routes = [
         component: () => import('../views/admin/MonitorView.vue'),
         meta: { title: t('admin.runtime_monitoring') },
       },
-      {
-        // 定时任务：从仪表盘拆出的配置类页面
-        path: 'cron',
-        name: 'AdminCron',
-        component: () => import('../views/admin/CronView.vue'),
-        meta: { title: t('task.scheduled_tasks') },
-      },
       // 旧入口保留重定向，避免书签 / 文档 / 告警链接失效
       {
         path: 'performance',
@@ -197,37 +190,6 @@ const routes = [
         name: 'AdminSettings',
         component: () => import('../views/admin/SettingsView.vue'),
         meta: { title: t('settings.system_settings') },
-      },
-      // ── 邮件发信（邮箱验证码登录 / 注册邮箱验证 / 密码重置 / 欢迎邮件）──
-      // 发信服务器地址与凭据全部在此配置，代码中不含任何厂商默认地址。
-      {
-        path: 'mail',
-        name: 'AdminMail',
-        component: () => import('../views/admin/MailView.vue'),
-        meta: { title: t('mail.email_config') },
-      },
-      // ── 支付渠道配置（支付宝 / 微信支付 / PayPal）──
-      // 凭据加密入库 + 保存后热生效；原「系统设置」里的支付卡片已迁移到此处，
-      // 避免同一份配置在两处维护。
-      {
-        path: 'payment',
-        name: 'AdminPayment',
-        component: () => import('../views/admin/PaymentView.vue'),
-        meta: { title: t('billing.payment_config') },
-      },
-      // 发票审核 —— 与支付渠道同属「钱相关的运营动作」，故相邻。
-      {
-        path: 'invoices',
-        name: 'AdminInvoices',
-        component: () => import('../views/admin/InvoiceReviewView.vue'),
-        meta: { title: t('admin.invoice_review') },
-      },
-      // 套餐目录 —— 决定用户能买什么、平台收多少，同属商业化运营。
-      {
-        path: 'packages',
-        name: 'AdminPackages',
-        component: () => import('../views/admin/PackagesView.vue'),
-        meta: { title: t('admin.packages_admin_title') },
       },
       // ── 数据存储（原「Redis 管理」+「数据库管理」合并）──
       {
@@ -256,28 +218,6 @@ const routes = [
         component: () => import('../views/admin/DiagnosticsView.vue'),
         meta: { title: t('admin.diagnostics') },
       },
-      // ── 访问安全 ──
-      {
-        // 角色 + 群组合并
-        path: 'access',
-        name: 'AdminAccess',
-        component: () => import('../views/admin/AccessView.vue'),
-        meta: { title: t('errors.permissions_and_organization') },
-      },
-      {
-        // 三方登录与人机验证 + 隐私模式管控合并
-        path: 'identity',
-        name: 'AdminIdentity',
-        component: () => import('../views/admin/IdentityView.vue'),
-        meta: { title: t('common.authentication_and_protection') },
-      },
-      {
-        // 模型策略 + 模型路由合并
-        path: 'models',
-        name: 'AdminModels',
-        component: () => import('../views/admin/ModelGovernanceView.vue'),
-        meta: { title: t('agent.model_control') },
-      },
       // ── 平台 ──
       // 团队 / 租户用量：替代已下线的「用量目录」——按天/成员/租户看 token 与成本构成。
       {
@@ -299,16 +239,67 @@ const routes = [
         meta: { title: t('knowledge.api_documentation') },
       },
       // ── 旧入口重定向（书签 / 文档 / 告警链接兼容）──
-      { path: 'roles', redirect: { path: '/admin/access', query: { tab: 'roles' } } },
-      { path: 'groups', redirect: { path: '/admin/access', query: { tab: 'groups' } } },
-      { path: 'oauth-providers', redirect: { path: '/admin/identity', query: { tab: 'oauth' } } },
-      { path: 'privacy', redirect: { path: '/admin/identity', query: { tab: 'privacy' } } },
-      { path: 'model-policy', redirect: { path: '/admin/models', query: { tab: 'policy' } } },
-      { path: 'model-router', redirect: { path: '/admin/models', query: { tab: 'routing' } } },
       { path: 'redis', redirect: { path: '/admin/datastores', query: { tab: 'redis' } } },
       { path: 'database', redirect: { path: '/admin/datastores', query: { tab: 'database' } } },
       { path: 'tenants', redirect: { path: '/admin/tenancy', query: { tab: 'tenants' } } },
       { path: 'domains', redirect: { path: '/admin/tenancy', query: { tab: 'domains' } } },
+    ],
+  },
+  // 租户管理员后台：与 /admin（平台）并列的一套入口，菜单不同、数据按租户隔离。
+  {
+    path: '/tenant',
+    component: () => import('../views/tenant/Layout.vue'),
+    meta: { requiresAuth: true, requiresAdmin: true },
+    children: [
+      { path: '', redirect: '/tenant/identity' },
+      {
+        path: 'identity',
+        name: 'TenantIdentity',
+        component: () => import('../views/admin/IdentityView.vue'),
+        meta: { title: t('common.authentication_and_protection') },
+      },
+      {
+        path: 'payment',
+        name: 'TenantPayment',
+        component: () => import('../views/admin/PaymentView.vue'),
+        meta: { title: t('billing.payment_config') },
+      },
+      {
+        path: 'invoices',
+        name: 'TenantInvoices',
+        component: () => import('../views/admin/InvoiceReviewView.vue'),
+        meta: { title: t('admin.invoice_review') },
+      },
+      {
+        path: 'domains',
+        name: 'TenantDomains',
+        component: () => import('../views/admin/DomainManagementView.vue'),
+        meta: { title: t('admin.tenants_and_domains') },
+      },
+      {
+        path: 'access',
+        name: 'TenantAccess',
+        component: () => import('../views/admin/AccessView.vue'),
+        meta: { title: t('errors.permissions_and_organization') },
+      },
+      {
+        path: 'usage',
+        name: 'TenantUsage',
+        component: () => import('../views/admin/UsageInsightsView.vue'),
+        meta: { title: t('admin.usage_insights') },
+      },
+      {
+        path: 'packages',
+        name: 'TenantPackages',
+        component: () => import('../views/admin/PackagesView.vue'),
+        meta: { title: t('admin.packages_admin_title') },
+      },
+      {
+        path: 'mail',
+        name: 'TenantMail',
+        component: () => import('../views/admin/MailView.vue'),
+        meta: { title: t('mail.email_config') },
+      },
     ],
   },
   // 404 兜底：避免未知地址白屏

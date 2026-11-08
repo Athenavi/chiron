@@ -354,7 +354,7 @@ func NewGatewayRouter(
 	mediaHandler.SetMediaRoot(cfg.StorageRoot + "/media")
 
 	// 通用分片上传（断点续传）
-	uploadHandler := NewUploadHandler(authenticator, cfg.StorageRoot, fileStore)
+	uploadHandler := NewUploadHandler(authenticator, cfg.StorageRoot, fileStore, pythonClient)
 	uploadHandler.RegisterRoutes(mux, authMW, rlMW)
 
 	// 用户侧市场（技能/Agent/MCP 浏览与一键安装）
@@ -392,6 +392,8 @@ func NewGatewayRouter(
 		settingsStore = settings.New(db.Pool, cfg.AppSecret)
 	}
 	billingHandler.ReloadPaymentConfig(context.Background(), settingsStore)
+	// 租户级支付配置从这里按需读取（system_settings.tenant_id>0）。
+	billingHandler.SetSettingsStore(settingsStore)
 
 	// 后台已保存的存储配置在启动时应用一次（env 初始化之后、订阅之前）：
 	// 「后台改过存储后端」的环境重启后应沿用该配置，而非回退 env。
@@ -553,13 +555,13 @@ func NewGatewayRouter(
 	// Enterprise market（authMW + RequireEntPerm("market:manage")）：能力市场 + 租户授权
 	NewMarketHandler().RegisterRoutes(mux, authMW)
 
-	// Enterprise model router（authMW + RequireEntPerm("model:route")）：租户模型路由配置
-	// 建表已收敛到 Alembic；这里只做只读校验，缺表时明确告警（而不是静默让引擎侧 500）。
+	// Enterprise model router：**管理面 CRUD 已下线**（/admin/models 页面移除，
+	// 模型路由规则不再允许在后台改动 —— 它直接影响请求路径）。运行时读取保留：
+	// `/v1/internal/model-routes` 仍由 SyncRoutes 提供给 Python 引擎同步现有规则。
 	modelRouter := NewEntModelRouterHandler()
 	if err := modelRouter.VerifyTable(context.Background()); err != nil {
 		slog.Error("ent_model_routes not ready; model routing will fail", "error", err)
 	}
-	modelRouter.RegisterRoutes(mux, authMW)
 
 	// Enterprise webhook（authMW + RequireEntPerm("webhook:manage")）：事件通知
 	// 企业 Webhook 可靠投递器：Redis 消费组跨实例投递（入口 IngestEvent 已持久化入流）

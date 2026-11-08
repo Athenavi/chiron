@@ -5,6 +5,8 @@
  * （`{n} 分钟前` / `{n} min ago` / `قبل {n} دقيقة`），拼接必然出错。
  */
 export default {
+  preview_truncated: '…（内容过长，已截断）',
+  preview_unsupported: '该文件类型无法在线预览，可用下方按钮下载。',
   time: {
     justNow: '刚刚',
     minutesAgo: '{n} 分钟前',

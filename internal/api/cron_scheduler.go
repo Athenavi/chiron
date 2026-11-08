@@ -557,31 +557,5 @@ func HandleCronWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// HandleCronTrigger 管理端手动触发：POST /v1/admin/cron-jobs/{id}/trigger
-func (h *AdminHandler) HandleCronTrigger(w http.ResponseWriter, r *http.Request) {
-	jobID := r.PathValue("id")
-	tenantID := GetTenantID(r)
-	if tenantID == 0 {
-		Unauthorized(w, "missing tenant context")
-		return
-	}
-	var j jobRow
-	// 触发同样是租户级操作：只按 id 取会让任意租户 admin 触发别人的任务
-	// （而 job 的 tenant/user 直接决定 python 侧以什么身份执行）。
-	if err := db.GlobalDBManager.QueryRow(r.Context(), cronLoadQuery, jobID, tenantID).
-		Scan(&j.ID, &j.Name, &j.Schedule, &j.Task, &j.TenantID, &j.UserID); err != nil {
-		NotFound(w, "job not found")
-		return
-	}
-	// 同步抢租约：job 正在运行时返回 409；抢到后异步执行。
-	s := &CronScheduler{python: cronSchedulerPython}
-	switch err := s.triggerManual(j); {
-	case err == nil:
-		OK(w, map[string]interface{}{"status": "triggered"})
-	case errors.Is(err, errCronBusy):
-		JSON(w, http.StatusConflict, APIResponse{Success: false, Error: "job is running"})
-	default:
-		slog.Warn("cron trigger failed", "job", jobID, "error", err)
-		InternalError(w, "trigger failed")
-	}
-}
+// 管理端手动触发（POST /v1/admin/cron-jobs/{id}/trigger）已随 /admin/cron 页面上线：
+// 调度器与 Webhook 入口（/v1/hooks/{id}）仍使用同一套 triggerManual 执行器。

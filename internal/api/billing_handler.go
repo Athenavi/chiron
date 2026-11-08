@@ -1,7 +1,10 @@
 package api
 
 import (
+	"bytes"
+	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"math"
 	"net/http"
@@ -13,6 +16,8 @@ import (
 	"github.com/athenavi/chiron/config"
 	"github.com/athenavi/chiron/internal/auth"
 	"github.com/athenavi/chiron/internal/billing"
+	"github.com/athenavi/chiron/internal/db"
+	"github.com/athenavi/chiron/internal/settings"
 )
 
 type BillingHandler struct {
@@ -27,6 +32,16 @@ type BillingHandler struct {
 	payCfg PaymentConfig
 	alipay *billing.AlipayClient // nil = 未配置/未启用，充值入口返回 501
 	wechat *billing.WechatClient // nil = 未配置/未启用
+
+	// settingsStore 用于按租户读取支付配置（system_settings.tenant_id>0）。
+	// 启动时注入一次，之后只读；租户未单独配置时回退全局 payCfg。
+	settingsStore *settings.Store
+
+	// wechatSerialIndex: 微信商户证书序列号 → 客户端。微信 V3 回调带
+	// `Wechatpay-Serial` 头，命中索引即可 O(1) 定位，避免每次回调遍历所有租户。
+	// 懒加载；支付配置变更时清空，下次回调用新配置重建。
+	wechatSerialMu    sync.RWMutex
+	wechatSerialIndex map[string]*billing.WechatClient
 }
 
 func NewBillingHandler(mgr *billing.Manager, authenticator *auth.Authenticator, cfg *config.Config) *BillingHandler {
@@ -49,10 +64,12 @@ func (h *BillingHandler) ApplyPaymentConfig(p PaymentConfig) {
 		slog.Error("payment client init failed", "error", joinErrs(errs))
 	}
 	h.payMu.Lock()
-	defer h.payMu.Unlock()
 	h.payCfg = p
 	h.alipay = alipay
 	h.wechat = wechat
+	h.payMu.Unlock()
+	// 配置变更后列宽索引失效，下次回调按新配置重建。
+	h.invalidateWechatSerialIndex()
 }
 
 // paymentConfig 返回当前生效的支付配置快照（值拷贝，调用方可安全读取）。
@@ -60,6 +77,102 @@ func (h *BillingHandler) paymentConfig() PaymentConfig {
 	h.payMu.RLock()
 	defer h.payMu.RUnlock()
 	return h.payCfg
+}
+
+// SetSettingsStore 注入设置存储：租户级支付配置按需从这里读取。
+func (h *BillingHandler) SetSettingsStore(store *settings.Store) {
+	h.settingsStore = store
+}
+
+// paymentConfigForTenant 返回某租户生效的支付配置：租户单独配置优先，否则全局默认。
+//
+// 每次下单读一次 DB：支付下单是低频操作，换取"保存即生效、多副本一致"，
+// 比维护一层需要失效的进程内缓存更不容易出错。
+func (h *BillingHandler) paymentConfigForTenant(ctx context.Context, tenantID int) PaymentConfig {
+	if tenantID > 0 && h.settingsStore != nil {
+		if saved, err := h.settingsStore.LoadTenantConfig(ctx, tenantID, settingsCategoryPayment); err == nil && len(saved) > 0 {
+			return paymentConfigFromEnv(h.cfg).applyMap(saved)
+		}
+	}
+	return h.paymentConfig()
+}
+
+// tenantIDForPayment 按订单反查租户（payments.user_id → users.tenant_id）。
+//
+// 回调/渠道查询没有 JWT，必须从订单归属推导租户；否则租户自己的商户号签出的
+// 回调会被全局凭据验签失败，用户永远到不了账。
+func (h *BillingHandler) tenantIDForPayment(ctx context.Context, paymentID string) int {
+	if paymentID == "" {
+		return 0
+	}
+	var tenantID int
+	_ = db.GlobalDBManager.QueryRow(ctx,
+		`SELECT COALESCE(u.tenant_id, 0)
+		   FROM payments p LEFT JOIN users u ON u.id = p.user_id
+		  WHERE p.id = $1`, paymentID).Scan(&tenantID)
+	return tenantID
+}
+
+// clientsForPayment 按订单所属租户构造渠道客户端。
+func (h *BillingHandler) clientsForPayment(ctx context.Context, paymentID string) (PaymentConfig, *billing.AlipayClient, *billing.WechatClient) {
+	cfg := h.paymentConfigForTenant(ctx, h.tenantIDForPayment(ctx, paymentID))
+	alipay, wechat, _ := buildPaymentClients(cfg)
+	return cfg, alipay, wechat
+}
+
+// wechatSerialKey 归一化微信商户证书序列号（回调头 Wechatpay-Serial）。
+func wechatSerialKey(cfg PaymentConfig) string {
+	return strings.ToUpper(strings.TrimSpace(cfg.WechatMchCertSerialNo))
+}
+
+// wechatClientsBySerial 返回“证书序列号 → 微信客户端”索引（懒加载）。
+//
+// 微信 V3 回调带 `Wechatpay-Serial`，用它直接定位对应租户的客户端；
+// 未命中时才回退到遍历（旧行为）。索引在支付配置变更后由
+// invalidateWechatSerialIndex 清空，下次回调按新配置重建。
+func (h *BillingHandler) wechatClientsBySerial(ctx context.Context) map[string]*billing.WechatClient {
+	h.wechatSerialMu.RLock()
+	idx := h.wechatSerialIndex
+	h.wechatSerialMu.RUnlock()
+	if idx != nil {
+		return idx
+	}
+
+	h.wechatSerialMu.Lock()
+	defer h.wechatSerialMu.Unlock()
+	if h.wechatSerialIndex != nil {
+		return h.wechatSerialIndex
+	}
+	idx = make(map[string]*billing.WechatClient)
+	add := func(cfg PaymentConfig) {
+		key := wechatSerialKey(cfg)
+		if key == "" {
+			return
+		}
+		if _, exists := idx[key]; exists {
+			return
+		}
+		if _, wc, _ := buildPaymentClients(cfg); wc != nil {
+			idx[key] = wc
+		}
+	}
+	add(h.paymentConfig())
+	if h.settingsStore != nil {
+		if ids, err := h.settingsStore.TenantIDsWithConfig(ctx, settingsCategoryPayment); err == nil {
+			for _, tenantID := range ids {
+				add(h.paymentConfigForTenant(ctx, tenantID))
+			}
+		}
+	}
+	h.wechatSerialIndex = idx
+	return idx
+}
+
+// invalidateWechatSerialIndex 在支付配置变更后清空序列号索引。
+func (h *BillingHandler) invalidateWechatSerialIndex() {
+	h.wechatSerialMu.Lock()
+	h.wechatSerialIndex = nil
+	h.wechatSerialMu.Unlock()
 }
 
 // alipayClient 返回当前支付宝客户端（nil 表示未配置或未启用）。
@@ -161,7 +274,11 @@ var usageGroupByWhitelist = map[string]bool{
 
 // GetPackages 列出已上架套餐，供充值页展示"可购买的套餐"。
 func (h *BillingHandler) GetPackages(w http.ResponseWriter, r *http.Request) {
-	pkgs, err := h.mgr.ListPackages(r.Context())
+	tenantID := 0
+	if claims := auth.GetClaims(r.Context()); claims != nil {
+		tenantID = int(claims.TenantID)
+	}
+	pkgs, err := h.mgr.ListPackages(r.Context(), tenantID)
 	if err != nil {
 		slog.Error("list packages failed", "error", err)
 		InternalError(w, "failed to list packages")
@@ -343,8 +460,15 @@ func (h *BillingHandler) CreatePayment(w http.ResponseWriter, r *http.Request) {
 		BadRequest(w, "channel must be alipay / wechat / paypal")
 		return
 	}
+	// 支付配置按租户一套：租户单独配置优先，未配置回退全局默认。
+	tenantID := 0
+	if claims != nil {
+		tenantID = int(claims.TenantID)
+	}
+	pcfg := h.paymentConfigForTenant(r.Context(), tenantID)
+
 	// 后台可将某个渠道停用（不改动其凭据），此时直接拒绝下单，避免落一笔永远付不掉的订单。
-	if !h.paymentConfig().ChannelEnabled(body.Channel) {
+	if !pcfg.ChannelEnabled(body.Channel) {
 		JSON(w, http.StatusNotImplemented, APIResponse{Success: false, Error: "该支付渠道已停用"})
 		return
 	}
@@ -359,7 +483,7 @@ func (h *BillingHandler) CreatePayment(w http.ResponseWriter, r *http.Request) {
 
 	// 套餐订单：价格与 credits 全部以目录为准，请求体只用来选套餐 code。
 	if code := strings.TrimSpace(body.PackageCode); code != "" {
-		pkg, err := h.mgr.PackageByCode(r.Context(), code)
+		pkg, err := h.mgr.PackageByCode(r.Context(), int(claims.TenantID), code)
 		if err != nil {
 			slog.Error("load package failed", "package", code, "error", err)
 			InternalError(w, "failed to load package")
@@ -400,7 +524,7 @@ func (h *BillingHandler) CreatePayment(w http.ResponseWriter, r *http.Request) {
 	subject := fmt.Sprintf("chiron 充值 %d credits", body.Credits)
 	switch body.Channel {
 	case billing.ChannelAlipay:
-		alipay := h.alipayClient()
+		alipay, _, _ := buildPaymentClients(pcfg)
 		if alipay == nil {
 			JSON(w, http.StatusNotImplemented, APIResponse{Success: false, Error: "支付宝支付未配置（后台「支付配置」或 ALIPAY_* 环境变量）"})
 			return
@@ -421,12 +545,12 @@ func (h *BillingHandler) CreatePayment(w http.ResponseWriter, r *http.Request) {
 		p.QRCode = qr
 
 	case billing.ChannelWechat:
-		wechat := h.wechatClient()
+		_, wechat, _ := buildPaymentClients(pcfg)
 		if wechat == nil {
 			JSON(w, http.StatusNotImplemented, APIResponse{Success: false, Error: "微信支付未配置（后台「支付配置」或 WXPAY_* 环境变量）"})
 			return
 		}
-		notifyURL := h.paymentConfig().WechatNotifyURL()
+		notifyURL := pcfg.WechatNotifyURL()
 		if notifyURL == "" {
 			JSON(w, http.StatusNotImplemented, APIResponse{Success: false, Error: "公网基础 URL 未配置，无法接收微信回调"})
 			return
@@ -474,19 +598,20 @@ func (h *BillingHandler) GetOrder(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if p.Status == billing.PayStatusPending {
-		// 渠道查询兜底（失败不阻塞响应）
+		// 渠道查询兜底（失败不阻塞响应）——按订单租户的配置构造客户端。
+		_, alipay, wechat := h.clientsForPayment(ctx, p.ID)
 		switch p.Channel {
 		case billing.ChannelAlipay:
-			if client := h.alipayClient(); client != nil {
-				if tradeNo, paid, qErr := client.Query(ctx, p.ID); qErr == nil && paid {
+			if alipay != nil {
+				if tradeNo, paid, qErr := alipay.Query(ctx, p.ID); qErr == nil && paid {
 					if _, _, cErr := h.mgr.ConfirmPayment(ctx, p.ID, tradeNo); cErr != nil {
 						slog.Warn("alipay query confirm failed", "error", cErr)
 					}
 				}
 			}
 		case billing.ChannelWechat:
-			if client := h.wechatClient(); client != nil {
-				if tradeNo, paid, qErr := client.Query(ctx, p.ID); qErr == nil && paid {
+			if wechat != nil {
+				if tradeNo, paid, qErr := wechat.Query(ctx, p.ID); qErr == nil && paid {
 					if _, _, cErr := h.mgr.ConfirmPayment(ctx, p.ID, tradeNo); cErr != nil {
 						slog.Warn("wechat query confirm failed", "error", cErr)
 					}
@@ -504,11 +629,6 @@ func (h *BillingHandler) GetOrder(w http.ResponseWriter, r *http.Request) {
 // AlipayCallback 支付宝异步通知（无认证，靠签名验签）。
 // 验签通过且金额一致则幂等入账；返回 "success"（支付宝协议要求）。
 func (h *BillingHandler) AlipayCallback(w http.ResponseWriter, r *http.Request) {
-	alipay := h.alipayClient()
-	if alipay == nil {
-		JSON(w, http.StatusNotImplemented, APIResponse{Success: false, Error: "alipay not configured"})
-		return
-	}
 	if err := r.ParseForm(); err != nil {
 		BadRequest(w, "bad form")
 		return
@@ -518,6 +638,15 @@ func (h *BillingHandler) AlipayCallback(w http.ResponseWriter, r *http.Request) 
 		if len(vs) > 0 {
 			params[k] = vs[0]
 		}
+	}
+
+	// 支付宝回调带明文 out_trade_no：先按订单反查租户，再用该租户的客户端验签。
+	// 否则租户自己的商户号签出的回调会被全局凭据验签失败，用户永远到不了账。
+	orderID := strings.TrimSpace(params["out_trade_no"])
+	_, alipay, _ := h.clientsForPayment(r.Context(), orderID)
+	if alipay == nil {
+		JSON(w, http.StatusNotImplemented, APIResponse{Success: false, Error: "alipay not configured"})
+		return
 	}
 
 	outTradeNo, tradeNo, ok := alipay.VerifyCallback(params)
@@ -565,14 +694,59 @@ func (h *BillingHandler) AlipayCallback(w http.ResponseWriter, r *http.Request) 
 // WechatCallback 微信支付回调（无认证，靠平台证书验签 + AES-GCM 解密）。
 // 验签/金额校验通过则幂等入账；返回微信要求的 {"code":"SUCCESS"}。
 func (h *BillingHandler) WechatCallback(w http.ResponseWriter, r *http.Request) {
-	wechat := h.wechatClient()
-	if wechat == nil {
+	// 微信 V3 回调 body 是加密的，验签前拿不到订单号 → 依次尝试全局与各租户客户端。
+	// body 只能读一次，因此先缓存原始字节，每个候选客户端用一份新的 Body 重放。
+	raw, readErr := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if readErr != nil {
+		BadRequest(w, "invalid wechat callback")
+		return
+	}
+	_ = r.Body.Close()
+
+	candidates := make([]*billing.WechatClient, 0, 2)
+	// 优先按 `Wechatpay-Serial` 索引 O(1) 定位（租户越多收益越明显）。
+	if serial := strings.ToUpper(strings.TrimSpace(r.Header.Get("Wechatpay-Serial"))); serial != "" {
+		if wc := h.wechatClientsBySerial(r.Context())[serial]; wc != nil {
+			candidates = append(candidates, wc)
+		}
+	}
+	// 未命中（旧版回调 / 证书序列号未配置）才回退到遍历全局 + 各租户。
+	if len(candidates) == 0 {
+		if _, wc, _ := buildPaymentClients(h.paymentConfig()); wc != nil {
+			candidates = append(candidates, wc)
+		}
+		if h.settingsStore != nil {
+			if ids, err := h.settingsStore.TenantIDsWithConfig(r.Context(), settingsCategoryPayment); err == nil {
+				for _, tenantID := range ids {
+					if _, wc, _ := buildPaymentClients(h.paymentConfigForTenant(r.Context(), tenantID)); wc != nil {
+						candidates = append(candidates, wc)
+					}
+				}
+			}
+		}
+	}
+	if len(candidates) == 0 {
 		JSON(w, http.StatusNotImplemented, APIResponse{Success: false, Error: "wechat not configured"})
 		return
 	}
-	outTradeNo, tradeNo, paid, amountCents, err := wechat.ParseCallback(r)
-	if err != nil {
-		slog.Warn("wechat callback parse failed", "error", err)
+
+	var (
+		outTradeNo  string
+		tradeNo     string
+		paid        bool
+		amountCents *int64
+		parseErr    error
+	)
+	for _, wc := range candidates {
+		req := r.Clone(r.Context())
+		req.Body = io.NopCloser(bytes.NewReader(raw))
+		outTradeNo, tradeNo, paid, amountCents, parseErr = wc.ParseCallback(req)
+		if parseErr == nil {
+			break
+		}
+	}
+	if parseErr != nil {
+		slog.Warn("wechat callback parse failed", "error", parseErr)
 		BadRequest(w, "invalid wechat callback")
 		return
 	}

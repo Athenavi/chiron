@@ -150,13 +150,24 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import { Button, Modal, Select, Table, Tag, Textarea, message } from 'ant-design-vue'
 import { ReloadOutlined } from '@ant-design/icons-vue'
 import { useI18n } from 'vue-i18n'
-import { listInvoices, reviewInvoice, type AdminInvoice, type InvoiceStatus } from '../../api/admin'
+import {
+  listInvoices,
+  listTenantInvoices,
+  reviewInvoice,
+  reviewTenantInvoice,
+  type AdminInvoice,
+  type InvoiceStatus,
+} from '../../api/admin'
 import { describeApiError } from '../../utils/apiError'
 
 const { t } = useI18n()
+const route = useRoute()
+// /tenant/invoices 只审本租户；/admin/invoices 是平台级（owner）。
+const isTenantArea = computed(() => route.path.startsWith('/tenant'))
 
 const loading = ref(false)
 const submitting = ref(false)
@@ -195,7 +206,9 @@ const action = reactive<{
 async function load() {
   loading.value = true
   try {
-    rows.value = await listInvoices(filter.value)
+    rows.value = isTenantArea.value
+      ? await listTenantInvoices(filter.value)
+      : await listInvoices(filter.value)
   } catch (e) {
     message.error(describeApiError(e))
   } finally {
@@ -233,7 +246,8 @@ async function submit() {
 
   submitting.value = true
   try {
-    await reviewInvoice(invoice.id, {
+    const doReview = isTenantArea.value ? reviewTenantInvoice : reviewInvoice
+    await doReview(invoice.id, {
       status: action.kind === 'approve' ? 'approved' : 'rejected',
       review_note: action.kind === 'reject' ? action.reason.trim() : undefined,
     })

@@ -50,11 +50,8 @@ func (h *EntIdentityHandler) scanGroup(ctx context.Context, id string, scope str
 
 // ListGroups GET /v1/ent/groups
 func (h *EntIdentityHandler) ListGroups(w http.ResponseWriter, r *http.Request) {
-	scope, isOwner := entTenantScope(auth.GetClaims(r.Context()))
-	if !isOwner && scope == "" {
-		Forbidden(w, "tenant context missing")
-		return
-	}
+	// 同 ListRoles：列表锚定当前租户，避免平台 owner 看到别家租户的同名群组。
+	scope := entCurrentTenantScope(auth.GetClaims(r.Context()))
 	rows, err := h.db.Query(r.Context(),
 		`SELECT g.id, g.name, g.description, g.created_at, COUNT(gm.user_id)::int AS member_count
 		 FROM ent_groups g

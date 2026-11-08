@@ -586,6 +586,10 @@ const pendingQuestions = ref<PendingQuestion[]>([])
 const budgetSnapshot = ref<Record<string, { used?: number; limit?: number }> | null>(null)
 // 会话累计成本（分）。计价在**网关**侧（`/v1/sessions/{id}/metrics`），引擎只产 token。
 const sessionCostCents = ref<number | null>(null)
+/** 历史会话最近一轮用量（metrics 回放；实时会话优先用 items 里的 turn_stats） */
+const metricsTurnStats = ref<{ kind: 'turn_stats'; inputTokens: number; outputTokens: number } | null>(null)
+/** 历史会话的上下文快照（turns.context；实时会话优先用 done 事件） */
+const metricsContext = ref<{ used?: number; limit?: number; compact_ratio?: number; breakdown?: Record<string, number>; largest?: Array<{ class?: string; role?: string; tokens?: number }> } | null>(null)
 // 上下文快照（引擎 `done` 带 `context={used, limit, compact_ratio}`）。阈值也由引擎给出，
 // 前端不写死常量 —— 它可被租户/模式覆盖。
 const contextSnapshot = ref<{ used?: number; limit?: number; compact_ratio?: number; breakdown?: Record<string, number>; largest?: Array<{ class?: string; role?: string; tokens?: number }> } | null>(null)
@@ -644,6 +648,17 @@ async function refreshSessionCost() {
   try {
     const m = await getSessionMetrics(sid)
     sessionCostCents.value = Number(m?.totals?.cost_cents ?? 0)
+    // 历史会话没有实时事件：用 metrics 回放最近一轮用量与上下文快照，
+    // 否则刷新后状态栏只剩"上下文占用：暂无数据"。
+    const lastTurn = (m?.turns?.[0] ?? null) as Record<string, unknown> | null
+    if (lastTurn) {
+      metricsTurnStats.value = {
+        kind: 'turn_stats',
+        inputTokens: Number(lastTurn.input_tokens ?? 0),
+        outputTokens: Number(lastTurn.output_tokens ?? 0),
+      }
+    }
+    metricsContext.value = (m?.context && typeof m.context === 'object') ? m.context : null
   } catch {
     // 拉不到就不显示 —— 这是展示信息，不该打断对话
     sessionCostCents.value = null
@@ -1741,6 +1756,9 @@ onMounted(async () => {
   // 监听网络在线/离线状态
   window.addEventListener('online', onOnline)
   window.addEventListener('offline', onOffline)
+  // 服务可达性：立即探一次，之后每 15s 一次（低频，不打断会话）
+  void probeServerHealth()
+  healthTimer = setInterval(probeServerHealth, HEALTH_POLL_MS)
   // 全局键盘快捷键由 useKeyboardShortcuts 自行注册/注销（见文件上方）
   // 新用户引导：首次进入会话页时按服务端进度决定要不要弹。
   // 不 await：引导是可选的，不该拖慢会话加载；接口失败在 composable 里静默吞掉。
@@ -1753,6 +1771,7 @@ onUnmounted(() => {
   closeSubagentStream()
   if (unifiedDoneTimer) { clearTimeout(unifiedDoneTimer); unifiedDoneTimer = null }
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
+  if (healthTimer) { clearInterval(healthTimer); healthTimer = null }
   window.removeEventListener('online', onOnline)
   window.removeEventListener('offline', onOffline)
 })
@@ -1797,6 +1816,33 @@ async function attemptReconnect() {
     if (reconnectAttempts < 5) {
       reconnectTimer = setTimeout(attemptReconnect, delay)
     }
+  }
+}
+
+// ── 服务可达性探测 ───────────────────────────────────────────────
+//
+// `navigator.onLine` 只说明"浏览器认为有网"：网关进程停了它依然是 true，
+// 于是底部状态栏一直显示「已连接」。这里直接探 `/health`，把**服务可达性**
+// 纳入状态；浏览器在线、服务可达、SSE 未断三者都成立才显示已连接。
+const serverReachable = ref(true)
+const HEALTH_POLL_MS = 15000
+let healthTimer: ReturnType<typeof setInterval> | null = null
+
+async function probeServerHealth() {
+  try {
+    await api.get('/health', { timeout: 5000 })
+    const wasDown = !serverReachable.value
+    serverReachable.value = true
+    // 服务恢复：重置退避并补一次重连（此前可能已经放弃重试）
+    if (wasDown && isOnline.value) {
+      reconnectAttempts = 0
+      void attemptReconnect()
+    }
+  } catch {
+    serverReachable.value = false
+    // 服务不可达时继续等健康探测来恢复，停掉 SSE 重连的退避定时器，
+    // 避免"服务没起就反复重连"制造一屏错误。
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
   }
 }
 
@@ -2042,6 +2088,8 @@ async function switchSession(id: string) {
       }
       contextChips.value = merged
     }
+    // 历史会话没有实时事件：拉一次 metrics 回放成本、最近一轮用量与上下文快照。
+    void refreshSessionCost()
   } catch { /* fallback */ } finally {
     if (mySeq === switchSeq.value) {
       loading.value = false
@@ -3235,18 +3283,18 @@ function continueGeneration() {
 
       <ChatStatusBar
         :model="llmModel"
-        :stats="lastTurnStats"
-        :context-used="lastTurnStats?.inputTokens ?? null"
+        :stats="lastTurnStats ?? metricsTurnStats"
+        :context-used="lastTurnStats?.inputTokens ?? metricsTurnStats?.inputTokens ?? null"
         :context-limit="contextWindow"
-        :compact-ratio="contextSnapshot?.compact_ratio ?? null"
-        :breakdown="contextSnapshot?.breakdown ?? null"
-        :largest="contextSnapshot?.largest ?? null"
+        :compact-ratio="contextSnapshot?.compact_ratio ?? metricsContext?.compact_ratio ?? null"
+        :breakdown="contextSnapshot?.breakdown ?? metricsContext?.breakdown ?? null"
+        :largest="contextSnapshot?.largest ?? metricsContext?.largest ?? null"
         :cache="cacheSnapshot"
         :compaction="lastCompaction"
         :budget="budgetSnapshot"
         :cost-cents="sessionCostCents"
         :subagent-active-count="subagentActiveCount"
-        :online="isOnline && !connectionLost"
+        :online="isOnline && serverReachable && !connectionLost"
         @toggle-subagents="subagentsOpen = !subagentsOpen"
         @toggle-stats="statsOpen = !statsOpen"
       />

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -457,9 +458,20 @@ func (h *AdminHandler) GetStorage(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	// 回显非敏感字段（endpoint / bucket / use_ssl）；access/secret **不回显** ——
+	// 长期凭据一旦下发就进了浏览器缓存与截图。前端留空即表示沿用已保存值
+	// （见 UpdateStorage / TestStorage 的补齐逻辑）。
+	cfg := StorageConfig{Backend: h.store.Backend()}
+	if s := h.ensureSettingsStore(); s != nil {
+		if saved, err := s.LoadConfig(r.Context(), settingsCategoryStorage); err == nil {
+			cfg.S3Endpoint, _ = saved["s3_endpoint"].(string)
+			cfg.S3Bucket, _ = saved["s3_bucket"].(string)
+			cfg.S3UseSSL, _ = saved["s3_use_ssl"].(bool)
+		}
+	}
 	OK(w, map[string]interface{}{
 		"backend": h.store.Backend(),
-		"config":  StorageConfig{},
+		"config":  cfg,
 	})
 }
 
@@ -492,6 +504,8 @@ func (h *AdminHandler) UpdateStorage(w http.ResponseWriter, r *http.Request) {
 		}
 		newStore, err = storage.NewStore("local", root, "", "", "", "", false)
 	case "s3":
+		// access/secret 留空 = 沿用已保存值：管理页不回显长期凭据。
+		fillS3CredentialsFromSaved(r.Context(), h, &body)
 		if body.S3Endpoint == "" || body.S3Bucket == "" || body.S3AccessKey == "" || body.S3SecretKey == "" {
 			BadRequest(w, "s3_endpoint, s3_bucket, s3_access_key, s3_secret_key are required for S3 backend")
 			return
@@ -540,6 +554,30 @@ func (h *AdminHandler) UpdateStorage(w http.ResponseWriter, r *http.Request) {
 	slog.Info("storage backend switched", "from", previous, "to", body.Backend)
 }
 
+// fillS3CredentialsFromSaved 在 access/secret 留空时用已保存值补齐。
+//
+// 管理页不回显长期凭据（GetStorage 刻意不返回），因此"留空"必须被解释为
+// "不修改"，而不是"清空" —— 否则用户只改 bucket 就会被 400 拦住。
+func fillS3CredentialsFromSaved(ctx context.Context, h *AdminHandler, body *StorageUpdateRequest) {
+	if body.S3AccessKey != "" && body.S3SecretKey != "" {
+		return
+	}
+	s := h.ensureSettingsStore()
+	if s == nil {
+		return
+	}
+	saved, err := s.LoadConfig(ctx, settingsCategoryStorage)
+	if err != nil {
+		return
+	}
+	if body.S3AccessKey == "" {
+		body.S3AccessKey, _ = saved["s3_access_key"].(string)
+	}
+	if body.S3SecretKey == "" {
+		body.S3SecretKey, _ = saved["s3_secret_key"].(string)
+	}
+}
+
 func (h *AdminHandler) TestStorage(w http.ResponseWriter, r *http.Request) {
 	if h.store == nil {
 		InternalError(w, "storage not initialized")
@@ -559,6 +597,8 @@ func (h *AdminHandler) TestStorage(w http.ResponseWriter, r *http.Request) {
 			"message": "本地存储可用",
 		})
 	case "s3":
+		// 与保存路径同一语义：凭据留空 = 沿用已保存值。
+		fillS3CredentialsFromSaved(r.Context(), h, &body)
 		if body.S3Endpoint == "" || body.S3Bucket == "" || body.S3AccessKey == "" || body.S3SecretKey == "" {
 			BadRequest(w, "s3_endpoint, s3_bucket, s3_access_key, s3_secret_key are required")
 			return

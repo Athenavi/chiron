@@ -717,30 +717,6 @@ export async function listModels(): Promise<LlmModel[]> {
   return Array.isArray(d?.models) ? d.models : []
 }
 
-export async function triggerCronJob(id: string): Promise<unknown> {
-  const resp = await api.post(`/v1/admin/cron-jobs/${id}/trigger`)
-  return resp.data
-}
-
-/** 生成 cron job 的 Webhook 触发 URL（POST，token 为鉴权） */
-export function cronWebhookUrl(id: string, token: string): string {
-  return `${location.origin}/v1/hooks/${id}?token=${encodeURIComponent(token)}`
-}
-
-/**
- * 轮换 cron job 的 Webhook token。
- *
- * 列表接口只回 `webhook_enabled` + 末 4 位提示，不回明文 token：那是长期有效的
- * 触发凭据，随列表下发等于把它暴露给每一个能打开管理页的人（以及浏览器缓存、
- * 日志、截图）。拿到 URL 的路径因此变成"显式重置一次"，旧 token 立即失效。
- */
-export async function resetCronWebhookToken(id: string): Promise<string> {
-  const resp = await api.post(`/v1/admin/cron-jobs/${encodeURIComponent(id)}/webhook-token`)
-  const d = resp.data?.data ?? resp.data
-  return typeof d?.webhook_token === 'string' ? d.webhook_token : ''
-}
-
-
 // ── 模板市场 / 共享可见性（2026-08-23 批次2）──
 export interface TemplateItem {
   id: string
@@ -875,6 +851,12 @@ export async function listPaymentChannels(): Promise<PaymentChannel[]> {
 
 
 // ── 参考价格目录（只读，多方交叉验证）──
+export interface ModelPriceSource {
+  source: string
+  input_per_1k: number
+  output_per_1k: number
+}
+
 export interface ModelPrice {
   model: string
   provider: string
@@ -883,6 +865,10 @@ export interface ModelPrice {
   currency: string
   sources: string[]
   source_count: number
+  /** 是否通过多源印证（≥2 个源在容差内一致）；false 表示单源或源间有分歧 */
+  verified: boolean
+  /** 每个源各自的报价，供「印证来源」一栏展开查看 */
+  source_details: ModelPriceSource[]
   verified_at: string
   mixed_per_1k: number
 }

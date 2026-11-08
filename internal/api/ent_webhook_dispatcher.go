@@ -275,8 +275,8 @@ func (d *WebhookDispatcher) auditDeliver(ctx context.Context, evt WebhookEvent, 
 		details["error"] = reason
 	}
 	_, _ = db.GlobalDBManager.Exec(ctx,
-		`INSERT INTO audit_logs (id, tenant_id, action, resource_type, resource_id, details)
-		 VALUES ($1, $2, $3, $4, $5, $6)`,
+		`INSERT INTO audit_logs (id, tenant_id, action, resource_type, resource_id, details, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, NOW())`,
 		newUUID(), evt.TenantID, "webhook.delivered", "webhook", whID, details)
 }
 

@@ -3,8 +3,10 @@ import AdminTabbedView from '@/components/admin/AdminTabbedView.vue'
 import RolesView from './RolesView.vue'
 import GroupsView from './GroupsView.vue'
 
+import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 const { t } = useI18n()
+const route = useRoute()
 // 权限与组织：角色 + 群组（同为 admin 权限域、同为 CRUD 型页面）
 const tabs = [
   { key: 'roles', label: t('admin.role'), comp: RolesView },
@@ -14,7 +16,7 @@ const tabs = [
 
 <template>
   <AdminTabbedView
-    route-path="/admin/access"
+    :route-path="route.path"
     default-tab="roles"
     :tabs="tabs"
   />

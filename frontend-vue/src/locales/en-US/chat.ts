@@ -2,6 +2,8 @@
  * chat domain strings (en-US). Keys must match zh-CN/chat.ts.
  */
 export default {
+  preview_truncated: '… (truncated: content too long)',
+  preview_unsupported: 'This file type cannot be previewed inline. Use the button below to download it.',
   time: {
     justNow: 'Just now',
     minutesAgo: '{n} min ago',

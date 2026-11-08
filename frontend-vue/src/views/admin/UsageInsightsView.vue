@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { Select, Table } from 'ant-design-vue'
 import { ReloadOutlined } from '@ant-design/icons-vue'
 import { getUsageCatalog, type UsageBucket, type UsageCatalog } from '../../api/admin'
-import { useAuthStore } from '../../stores/auth'
 import { errorMessageText } from '../../utils/apiError'
 import { useI18n } from 'vue-i18n'
 
@@ -19,26 +19,30 @@ import { useI18n } from 'vue-i18n'
  * "谁在用"，也无法跨租户看；现在按角色给出可用的视角。
  */
 const { t } = useI18n()
-const authStore = useAuthStore()
+const route = useRoute()
+// /tenant/usage：本租户的按天/成员明细；/admin/usage：平台只能看租户级。
+const isTenantArea = computed(() => route.path.startsWith('/tenant'))
 
 type GroupBy = 'day' | 'user' | 'tenant'
 type Range = '7d' | '30d' | '90d'
 
-const isOwner = computed(() => authStore.user?.role === 'owner')
-
-const group = ref<GroupBy>('day')
+const group = ref<GroupBy>(isTenantArea.value ? 'day' : 'tenant')
 const range = ref<Range>('30d')
 const loading = ref(false)
 const error = ref('')
 const catalog = ref<UsageCatalog | null>(null)
 
-const groupTabs = computed(() => {
-  const tabs: { value: GroupBy; label: string }[] = [
+const groupTabs = computed<{ value: GroupBy; label: string }[]>(() => {
+  if (isTenantArea.value) {
+    return [
+      { value: 'day', label: t('admin.usage_group_day') },
+      { value: 'user', label: t('admin.usage_group_user') },
+    ]
+  }
+  return [
+    { value: 'tenant', label: t('admin.usage_group_tenant') },
     { value: 'day', label: t('admin.usage_group_day') },
-    { value: 'user', label: t('admin.usage_group_user') },
   ]
-  if (isOwner.value) tabs.push({ value: 'tenant', label: t('admin.usage_group_tenant') })
-  return tabs
 })
 
 const rangeOptions = computed(() => [
@@ -107,6 +111,7 @@ async function load() {
     const from = new Date(to.getTime() - rangeDays[range.value] * 24 * 60 * 60 * 1000)
     catalog.value = await getUsageCatalog({
       groupBy: group.value,
+      scope: isTenantArea.value ? 'tenant' : 'admin',
       from: from.toISOString(),
       to: to.toISOString(),
     })

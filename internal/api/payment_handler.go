@@ -242,3 +242,89 @@ func (h *BillingHandler) ListPaymentChannels(w http.ResponseWriter, r *http.Requ
 	}
 	OK(w, map[string]interface{}{"channels": out})
 }
+
+// ── 租户级支付配置（/v1/tenant/payments）──────────────────────────────
+//
+// 平台级 /v1/admin/payments 是「全局默认」（system_settings.tenant_id=0）；
+// 租户管理员在这里维护**本租户**的一套渠道凭据，未配置时回退全局默认。
+// 数据隔离由 claims.tenant_id 保证：租户只能读写自己的那一行。
+
+// GetTenantPaymentConfig GET /v1/tenant/payments
+func (h *AdminHandler) GetTenantPaymentConfig(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil || claims.TenantID <= 0 {
+		Unauthorized(w, "missing tenant context")
+		return
+	}
+	saved := map[string]interface{}{}
+	if store := h.ensureSettingsStore(); store != nil {
+		if loaded, err := store.LoadTenantConfig(r.Context(), int(claims.TenantID), settingsCategoryPayment); err == nil {
+			saved = loaded
+		}
+	}
+	effective := paymentConfigFromEnv(h.cfg).applyMap(saved)
+	alipay, wechat, errs := buildPaymentClients(effective)
+	channels := map[string]PaymentChannelStatus{}
+	for _, ch := range paymentChannels {
+		channels[ch] = channelStatus(effective, ch, alipay, wechat)
+	}
+	OK(w, map[string]interface{}{
+		"config":            paymentConfigToMap(effective),
+		"channels":          channels,
+		"callback_urls":     effective.callbackURLs(),
+		"validation_errors": errs,
+		// using_default=true：本租户尚未单独配置，页面展示的是全局默认值。
+		"using_default": len(saved) == 0,
+	})
+}
+
+// SaveTenantPaymentConfig PUT /v1/tenant/payments
+//
+// 与平台保存同一套校验：先按目标配置构造渠道客户端，凭据非法直接 400 且不落库。
+func (h *AdminHandler) SaveTenantPaymentConfig(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil || claims.TenantID <= 0 {
+		Unauthorized(w, "missing tenant context")
+		return
+	}
+	var body struct {
+		Config map[string]interface{} `json:"config"`
+	}
+	if err := DecodeJSON(w, r, &body); err != nil {
+		BadRequest(w, ErrInvalidReq)
+		return
+	}
+	if body.Config == nil {
+		BadRequest(w, "config is required")
+		return
+	}
+	store := h.ensureSettingsStore()
+	if store == nil {
+		InternalError(w, "settings store unavailable")
+		return
+	}
+	filtered := filterPaymentConfig(body.Config)
+	target := paymentConfigFromEnv(h.cfg).applyMap(filtered)
+	if _, _, errs := buildPaymentClients(target); len(errs) > 0 {
+		BadRequest(w, "支付渠道配置校验失败："+joinErrs(errs))
+		return
+	}
+	if err := store.SaveTenantConfig(r.Context(), int(claims.TenantID), settingsCategoryPayment, filtered, claims.UserID); err != nil {
+		slog.Error("save tenant payment config failed", "tenant_id", claims.TenantID, "error", err)
+		InternalError(w, "save payment config failed")
+		return
+	}
+	// 返回与 GET 相同的结构：前端用服务端生效结果回填（被拒绝/未生效的字段立刻可见）。
+	alipay, wechat, errs := buildPaymentClients(target)
+	channels := map[string]PaymentChannelStatus{}
+	for _, ch := range paymentChannels {
+		channels[ch] = channelStatus(target, ch, alipay, wechat)
+	}
+	OK(w, map[string]interface{}{
+		"config":            paymentConfigToMap(target),
+		"channels":          channels,
+		"callback_urls":     target.callbackURLs(),
+		"validation_errors": errs,
+		"using_default":     false,
+	})
+}

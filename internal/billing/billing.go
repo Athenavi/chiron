@@ -344,8 +344,8 @@ func (m *Manager) GetPayment(ctx context.Context, id string) (*Payment, error) {
 }
 
 // PackageByCode 读套餐目录（delegate 到 EntitlementStore）。
-func (m *Manager) PackageByCode(ctx context.Context, code string) (*Package, error) {
-	return m.store.PackageByCode(ctx, code)
+func (m *Manager) PackageByCode(ctx context.Context, tenantID int, code string) (*Package, error) {
+	return m.store.PackageByCode(ctx, tenantID, code)
 }
 
 // ActiveEntitlements 返回用户在 now 时刻仍有效的权益（delegate 到 EntitlementStore）。
@@ -354,8 +354,8 @@ func (m *Manager) ActiveEntitlements(ctx context.Context, userID string, now tim
 }
 
 // ListPackages 返回已上架套餐目录（delegate 到 EntitlementStore）。
-func (m *Manager) ListPackages(ctx context.Context) ([]Package, error) {
-	return m.store.ListPackages(ctx)
+func (m *Manager) ListPackages(ctx context.Context, tenantID int) ([]Package, error) {
+	return m.store.ListPackages(ctx, tenantID)
 }
 
 // UserEntitlements 返回用户全部权益（含已过期），供"我的套餐"展示到期状态。
@@ -368,9 +368,9 @@ func (m *Manager) ExpiringEntitlements(ctx context.Context, now time.Time, withi
 	return m.store.ExpiringEntitlements(ctx, now, withinDays)
 }
 
-// AdminListPackages 返回全部套餐（含已下架），供后台管理页（P2-2c）。
-func (m *Manager) AdminListPackages(ctx context.Context) ([]Package, error) {
-	return m.store.AdminListPackages(ctx)
+// AdminListPackages 返回某租户全部套餐（含已下架），供租户后台管理页（P2-2c）。
+func (m *Manager) AdminListPackages(ctx context.Context, tenantID int) ([]Package, error) {
+	return m.store.AdminListPackages(ctx, tenantID)
 }
 
 // CreatePackage 新建套餐；主键由 store 生成，成功后可从 p.ID 取到。
@@ -378,14 +378,14 @@ func (m *Manager) CreatePackage(ctx context.Context, p *Package) error {
 	return m.store.CreatePackage(ctx, p)
 }
 
-// UpdatePackage 按 id 更新套餐可编辑字段；返回 false 表示该 id 不存在。
-func (m *Manager) UpdatePackage(ctx context.Context, p *Package) (bool, error) {
-	return m.store.UpdatePackage(ctx, p)
+// UpdatePackage 按 (id, tenant_id) 更新可编辑字段；返回 false 表示不存在或不属于该租户。
+func (m *Manager) UpdatePackage(ctx context.Context, tenantID int, p *Package) (bool, error) {
+	return m.store.UpdatePackage(ctx, tenantID, p)
 }
 
-// SetPackageEnabled 上架/下架套餐；返回 false 表示该 id 不存在。
-func (m *Manager) SetPackageEnabled(ctx context.Context, id string, enabled bool) (bool, error) {
-	return m.store.SetPackageEnabled(ctx, id, enabled)
+// SetPackageEnabled 上架/下架套餐（按 id + tenant_id）；返回 false 表示不存在或不属于该租户。
+func (m *Manager) SetPackageEnabled(ctx context.Context, tenantID int, id string, enabled bool) (bool, error) {
+	return m.store.SetPackageEnabled(ctx, tenantID, id, enabled)
 }
 
 // UpdatePaymentProvider 预下单成功后回填二维码与渠道订单号。

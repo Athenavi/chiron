@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/athenavi/chiron/internal/auth"
 	"github.com/athenavi/chiron/internal/billing"
 	"github.com/athenavi/chiron/internal/db"
 )
@@ -52,9 +53,22 @@ func (h *BillingHandler) RegisterAdminRoutes(adminMux *http.ServeMux) {
 	adminMux.HandleFunc("POST /billing/packages/{id}/restore", h.AdminEnablePackage)
 }
 
-// AdminListPackages 返回全部套餐（含已下架）。
+// AdminListPackages 返回**本租户**的全部套餐（含已下架）。
 func (h *BillingHandler) AdminListPackages(w http.ResponseWriter, r *http.Request) {
-	pkgs, err := h.mgr.AdminListPackages(r.Context())
+	tenantID, ok := packageTenantID(w, r)
+	if !ok {
+		return
+	}
+	h.adminListPackagesForTenant(w, r, tenantID)
+}
+
+// AdminListPackageTemplates 返回平台模板（tenant_id=0），供平台后台管理。
+func (h *BillingHandler) AdminListPackageTemplates(w http.ResponseWriter, r *http.Request) {
+	h.adminListPackagesForTenant(w, r, 0)
+}
+
+func (h *BillingHandler) adminListPackagesForTenant(w http.ResponseWriter, r *http.Request, tenantID int) {
+	pkgs, err := h.mgr.AdminListPackages(r.Context(), tenantID)
 	if err != nil {
 		slog.Error("admin list packages failed", "error", err)
 		InternalError(w, "failed to list packages")
@@ -63,14 +77,51 @@ func (h *BillingHandler) AdminListPackages(w http.ResponseWriter, r *http.Reques
 	OK(w, pkgs)
 }
 
+// ListPackageTemplates GET /v1/tenant/package-templates
+//
+// 平台内置模板（tenant_id=0）：租户新建套餐时可参考/预填；保存时写入租户自己的
+// tenant_id，不会改动模板本身。只读接口。
+func (h *BillingHandler) ListPackageTemplates(w http.ResponseWriter, r *http.Request) {
+	pkgs, err := h.mgr.AdminListPackages(r.Context(), 0)
+	if err != nil {
+		slog.Error("list package templates failed", "error", err)
+		InternalError(w, "failed to list package templates")
+		return
+	}
+	OK(w, pkgs)
+}
+
+// packageTenantID 取当前管理员所属租户；缺失时直接 401 并返回 ok=false。
+func packageTenantID(w http.ResponseWriter, r *http.Request) (int, bool) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil || claims.TenantID <= 0 {
+		Unauthorized(w, "missing tenant context")
+		return 0, false
+	}
+	return int(claims.TenantID), true
+}
+
 // AdminCreatePackage 新建套餐。
 func (h *BillingHandler) AdminCreatePackage(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := packageTenantID(w, r)
+	if !ok {
+		return
+	}
+	h.adminCreatePackageForTenant(w, r, tenantID)
+}
+
+// AdminCreatePackageTemplate 新建平台模板（tenant_id=0）。
+func (h *BillingHandler) AdminCreatePackageTemplate(w http.ResponseWriter, r *http.Request) {
+	h.adminCreatePackageForTenant(w, r, 0)
+}
+
+func (h *BillingHandler) adminCreatePackageForTenant(w http.ResponseWriter, r *http.Request, tenantID int) {
 	var body billingPackageRequest
 	if err := DecodeJSON(w, r, &body); err != nil {
 		BadRequest(w, ErrInvalidReq)
 		return
 	}
-	pkg, problems, err := h.buildPackage(r.Context(), body, true)
+	pkg, problems, err := h.buildPackage(r.Context(), tenantID, body, true)
 	if err != nil {
 		InternalError(w, err.Error())
 		return
@@ -104,12 +155,30 @@ func (h *BillingHandler) AdminUpdatePackage(w http.ResponseWriter, r *http.Reque
 		BadRequest(w, "package id is required")
 		return
 	}
+	tenantID, ok := packageTenantID(w, r)
+	if !ok {
+		return
+	}
+	h.adminUpdatePackageForTenant(w, r, id, tenantID)
+}
+
+// AdminUpdatePackageTemplate 更新平台模板（tenant_id=0）。
+func (h *BillingHandler) AdminUpdatePackageTemplate(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		BadRequest(w, "package id is required")
+		return
+	}
+	h.adminUpdatePackageForTenant(w, r, id, 0)
+}
+
+func (h *BillingHandler) adminUpdatePackageForTenant(w http.ResponseWriter, r *http.Request, id string, tenantID int) {
 	var body billingPackageRequest
 	if err := DecodeJSON(w, r, &body); err != nil {
 		BadRequest(w, ErrInvalidReq)
 		return
 	}
-	pkg, problems, err := h.buildPackage(r.Context(), body, false)
+	pkg, problems, err := h.buildPackage(r.Context(), tenantID, body, false)
 	if err != nil {
 		InternalError(w, err.Error())
 		return
@@ -120,7 +189,7 @@ func (h *BillingHandler) AdminUpdatePackage(w http.ResponseWriter, r *http.Reque
 	}
 	pkg.ID = id
 
-	found, err := h.mgr.UpdatePackage(r.Context(), pkg)
+	found, err := h.mgr.UpdatePackage(r.Context(), tenantID, pkg)
 	if err != nil {
 		slog.Error("update package failed", "id", id, "error", err)
 		InternalError(w, "failed to update package")
@@ -144,12 +213,30 @@ func (h *BillingHandler) AdminEnablePackage(w http.ResponseWriter, r *http.Reque
 }
 
 func (h *BillingHandler) setPackageEnabled(w http.ResponseWriter, r *http.Request, enabled bool) {
+	tenantID, ok := packageTenantID(w, r)
+	if !ok {
+		return
+	}
+	h.setPackageEnabledForTenant(w, r, tenantID, enabled)
+}
+
+// AdminDisablePackageTemplate 下架平台模板（tenant_id=0）。
+func (h *BillingHandler) AdminDisablePackageTemplate(w http.ResponseWriter, r *http.Request) {
+	h.setPackageEnabledForTenant(w, r, 0, false)
+}
+
+// AdminEnablePackageTemplate 重新上架平台模板（tenant_id=0）。
+func (h *BillingHandler) AdminEnablePackageTemplate(w http.ResponseWriter, r *http.Request) {
+	h.setPackageEnabledForTenant(w, r, 0, true)
+}
+
+func (h *BillingHandler) setPackageEnabledForTenant(w http.ResponseWriter, r *http.Request, tenantID int, enabled bool) {
 	id := strings.TrimSpace(r.PathValue("id"))
 	if id == "" {
 		BadRequest(w, "package id is required")
 		return
 	}
-	found, err := h.mgr.SetPackageEnabled(r.Context(), id, enabled)
+	found, err := h.mgr.SetPackageEnabled(r.Context(), tenantID, id, enabled)
 	if err != nil {
 		slog.Error("set package enabled failed", "id", id, "enabled", enabled, "error", err)
 		InternalError(w, "failed to update package")
@@ -177,7 +264,7 @@ func unprocessablePackage(w http.ResponseWriter, problems []string) {
 //
 // 返回 error 只表示**基础设施故障**（如模型表查不到），字段问题一律进 problems ——
 // 两者混在一起会让"数据库连不上"和"价格填了负数"都变成同一种 422。
-func (h *BillingHandler) buildPackage(ctx context.Context, body billingPackageRequest, requireCode bool) (*billing.Package, []string, error) {
+func (h *BillingHandler) buildPackage(ctx context.Context, tenantID int, body billingPackageRequest, requireCode bool) (*billing.Package, []string, error) {
 	problems := []string{}
 
 	code := strings.TrimSpace(body.Code)
@@ -229,6 +316,7 @@ func (h *BillingHandler) buildPackage(ctx context.Context, body billingPackageRe
 	}
 
 	return &billing.Package{
+		TenantID:      tenantID,
 		Code:          code,
 		Name:          name,
 		Credits:       body.Credits,

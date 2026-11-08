@@ -650,7 +650,7 @@ func (h *SubmitHandler) submitOnce(ctx context.Context, userID, sessionID, conte
 		// 是同一个观感）。实测：网关 401 期间的两轮提交都留成了僵尸 turn。
 		if turnID != "" {
 			sctx, cancelStore := storeCtxFor()
-			h.sessionMgr.FinishTurn(sctx, turnID, "failed", "engine unavailable: "+err.Error(), "", 0, 0, 0)
+			h.sessionMgr.FinishTurn(sctx, turnID, "failed", "engine unavailable: "+err.Error(), "", 0, 0, 0, nil)
 			cancelStore()
 		}
 		// 一个 token 都没烧：退还预检预留的估算（与上面的 FinishTurn 同一语义 —— 这一轮没跑起来）。
@@ -668,6 +668,9 @@ func (h *SubmitHandler) submitOnce(ctx context.Context, userID, sessionID, conte
 	// `usage` 是按次增量，并入会导致重复计费，守卫见 usageTotals.withEvent 与其单测。
 	var usage usageTotals
 	var turnModel string
+	// 最近一轮的上下文快照（done 事件里的 `context`）：随 FinishTurn 落库，
+	// 刷新/切换会话后状态栏仍能显示「上下文构成」，而不是只活在这一次 SSE 里。
+	var turnContext json.RawMessage
 	turnToolCallIDs := []string{} // S 修复：messages.tool_calls 列只存 tool_call id 集合（内容在 tool_calls 表）
 	// P1：host 证据采集器 —— 本轮所有工具事件都喂给它，收尾时据此判定完成情况。
 	ev := evidence.NewCollector()
@@ -802,6 +805,10 @@ func (h *SubmitHandler) submitOnce(ctx context.Context, userID, sessionID, conte
 		if evt.Model != "" {
 			turnModel = evt.Model
 		}
+		// 上下文快照同样只在 done 里带：保存最近一份，收尾时落进 turns.context。
+		if evt.Type == "done" && len(evt.Context) > 0 {
+			turnContext = evt.Context
+		}
 		// 增量落库：工具事件是关键节点，立即写；其余事件走 3s 节流。
 		// `compaction` 也立即写：它一回合最多一次、且是"上下文被压过"的唯一留痕，丢了就查不出来。
 		saveDraft(evt.Type == "tool_call" || evt.Type == "tool_result" || evt.Type == "guardrail_blocked" || evt.Type == "compaction")
@@ -921,7 +928,7 @@ func (h *SubmitHandler) submitOnce(ctx context.Context, userID, sessionID, conte
 		turnStatus = "failed"
 	}
 	if turnID != "" {
-		h.sessionMgr.FinishTurn(storeCtx, turnID, turnStatus, streamErr, turnModel, usage.input, usage.output, usage.cached)
+		h.sessionMgr.FinishTurn(storeCtx, turnID, turnStatus, streamErr, turnModel, usage.input, usage.output, usage.cached, turnContext)
 	}
 	// 中断留痕（2026-10-09）：`cancelled` 此前**只落在 `turns.status` 里**，界面无从呈现 ——
 	// 用户**主动停止**时前端自己有 `stopped` 标记（`ChatView.vue` 的停止分支），但

@@ -97,3 +97,15 @@ func entTenantScope(claims *auth.Claims) (string, bool) {
 	}
 	return "", false
 }
+
+// entCurrentTenantScope 返回**当前租户**的数字串（永不为空）。
+//
+// 与 entTenantScope 的分工：那个用于"平台 owner 可跨租户"的端点（空串 = 不加过滤）；
+// 角色/群组这类**租户内**资源的列表必须锚定当前租户 —— 每个租户都各有一套
+// owner/admin/member，跨租户列出来就是"多个同名角色"（实测三个租户 → 9 条）。
+func entCurrentTenantScope(claims *auth.Claims) string {
+	if claims != nil && claims.TenantID != 0 {
+		return tenantStr(claims.TenantID)
+	}
+	return tenantStr(DefaultTenantID)
+}

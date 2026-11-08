@@ -47,7 +47,7 @@ func (h *MailHandler) RequestPasswordReset(w http.ResponseWriter, r *http.Reques
 	}
 
 	ctx := r.Context()
-	row, err := h.loadConfig(ctx)
+	row, err := h.loadConfigForEmail(ctx, email)
 	if err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, ErrDBUnavailable)
 		return
@@ -164,6 +164,7 @@ func (h *MailHandler) ConfirmPasswordReset(w http.ResponseWriter, r *http.Reques
 
 	ctx := r.Context()
 	// 复核开关：管理员关闭密码重置后，此前已发出的链接不应继续可用。
+	// 此处只有 token、没有邮箱，按平台默认配置复核（重置入口的发送侧已按租户）。
 	row, err := h.loadConfig(ctx)
 	if err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, ErrDBUnavailable)

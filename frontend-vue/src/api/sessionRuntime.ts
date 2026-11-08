@@ -62,6 +62,17 @@ export interface SessionMetrics {
     sample_turns?: number
   }
   turns?: Array<Record<string, unknown>>
+  /**
+   * 最近一轮的上下文快照（turns.context，迁移 0006）。
+   * 历史会话没有实时 SSE 事件，靠它回放"上下文构成"。
+   */
+  context?: {
+    used?: number
+    limit?: number
+    compact_ratio?: number
+    breakdown?: Record<string, number>
+    largest?: Array<{ class?: string; role?: string; tokens?: number }>
+  }
 }
 
 export async function getSessionRuntime(sessionId: string): Promise<SessionRuntimeView> {

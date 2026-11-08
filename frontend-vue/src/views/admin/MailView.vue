@@ -30,6 +30,8 @@ const saving = ref(false)
 const testing = ref(false)
 const activeTab = ref('channel')
 const testTo = ref('')
+/** true = 本租户尚未单独配置，当前使用平台默认 SMTP */
+const usingDefault = ref(false)
 
 const form = ref({
   provider: 'smtp' as 'smtp' | 'qingchen',
@@ -93,7 +95,10 @@ async function load() {
   loading.value = true
   try {
     const cfg = await getMailAdminConfig()
-    if (cfg) Object.assign(form.value, cfg)
+    if (cfg) {
+      Object.assign(form.value, cfg)
+      usingDefault.value = !!cfg.using_default
+    }
   } catch (error) {
     message.error(describeApiError(error, t('errors.failed_to_load_email_config')))
   } finally {
@@ -149,6 +154,14 @@ onMounted(load)
           {{ $t('common.refresh') }}
         </Button>
       </template>
+
+      <Alert
+        v-if="usingDefault"
+        type="warning"
+        show-icon
+        class="mail-hint"
+        :message="$t('mail.using_platform_default')"
+      />
 
       <Alert
         type="info"

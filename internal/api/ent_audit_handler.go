@@ -55,8 +55,10 @@ func parseAuditQuery(q url.Values, now time.Time) (auditQueryFilter, error) {
 	}
 
 	parse := func(s string) (time.Time, error) {
-		if t, err := time.Parse("2006-01-02", s); err == nil {
-			return t.UTC(), nil
+		// 纯日期按**本地时区**解释：审计时间是给人看的"哪一天"，
+		// 按 UTC 解析会让本地 00:00–08:00 的记录落到前一天。
+		if t, err := time.ParseInLocation("2006-01-02", s, time.Local); err == nil {
+			return t, nil
 		}
 		return time.Parse(time.RFC3339, s)
 	}
@@ -68,14 +70,20 @@ func parseAuditQuery(q url.Values, now time.Time) (auditQueryFilter, error) {
 		if err != nil {
 			return f, fmt.Errorf("invalid to: %w", err)
 		}
-		f.To = t.UTC()
+		// `to` 是纯日期时表示"包含当天"：窗口上界取次日 00:00。
+		// 否则前端默认的 `to=今天` 会被当成今天 00:00，今天发生的记录全部被排除 ——
+		// 这正是"审计页明明有记录却查不到"的第二个根因。
+		if _, err := time.ParseInLocation("2006-01-02", toStr, time.Local); err == nil {
+			t = t.AddDate(0, 0, 1)
+		}
+		f.To = t
 	}
 	if fromStr := q.Get("from"); fromStr != "" {
 		t, err := parse(fromStr)
 		if err != nil {
 			return f, fmt.Errorf("invalid from: %w", err)
 		}
-		f.From = t.UTC()
+		f.From = t
 	}
 	if !f.From.Before(f.To) {
 		return f, fmt.Errorf("from must be before to")
@@ -140,7 +148,11 @@ func (h *EntAuditHandler) Query(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	where := ` WHERE tenant_id = $1 AND created_at >= $2 AND created_at < $3`
+	// created_at 是 `timestamp without time zone`（存的是写入时会话时区的墙钟时间），
+	// 而 f.From/f.To 是 UTC 时刻。直接把两者比较会差一个时区偏移 —— 实测本地
+	// (+08) 写入 09:47 的行，用 01:47Z 的窗口永远匹配不到，审计页恒为空。
+	// 显式 cast 成 timestamptz：让 PG 按会话时区把墙钟解释回绝对时刻再比较。
+	where := ` WHERE tenant_id = $1 AND created_at::timestamptz >= $2 AND created_at::timestamptz < $3`
 	args := []any{f.TenantID, f.From, f.To}
 	if f.UserID != "" {
 		args = append(args, f.UserID)

@@ -39,9 +39,7 @@ func registerAdminRoutes(
 	// 发票审核（P1-2 / roadmap §11.4）：注册在 adminMux 内部，才能拿到 {id} 路径参数
 	// （外层 mux 已按 /v1/admin 前缀统一套了 authMW + 权限），用法与 adminHandler 一致。
 	invoiceHandler.RegisterAdminRoutes(adminMux)
-	// 套餐目录 CRUD（P2-2c）：同样注册在 adminMux 内部才能拿到 {id}。
-	// 权限用 PermBillingManage（定价属经营决策），见下方 mux 挂载处。
-	billingHandler.RegisterAdminRoutes(adminMux)
+	// 套餐目录已改为租户级（/v1/tenant/packages），平台后台不再提供管理入口。
 	// Strip the /v1/admin prefix so adminMux patterns (e.g. "GET /metrics") match correctly
 	adminStrip := http.StripPrefix("/v1/admin", adminMux)
 	mux.Handle("GET /v1/admin/metrics", authMW(rlMW(adminReadMW(adminStrip))))
@@ -55,6 +53,8 @@ func registerAdminRoutes(
 	mux.Handle("GET /v1/admin/diagnostics", authMW(rlMW(adminReadMW(adminStrip))))
 	// D3：用量目录（只读）—— 与其它 admin 读端点同一权限口径。
 	mux.Handle("GET /v1/admin/usage/catalog", authMW(rlMW(adminReadMW(adminStrip))))
+	// 租户级用量：本租户按天/模型/成员（平台侧只允许租户级）。
+	mux.Handle("GET /v1/tenant/usage/catalog", authMW(rlMW(adminReadMW(http.HandlerFunc(adminHandler.GetTenantUsageCatalog)))))
 	// 新用户引导漏斗（P0-3 验收「完成率可查」）—— 只读统计，与其它 admin 读端点同口径。
 	mux.Handle("GET /v1/admin/onboarding/funnel", authMW(rlMW(adminReadMW(adminStrip))))
 	mux.Handle("POST /v1/admin/maintenance", authMW(rlMW(platformWriteMW(adminStrip))))
@@ -139,23 +139,40 @@ func registerAdminRoutes(
 	// 支付渠道配置（后台「支付配置」页面）
 	mux.Handle("GET /v1/admin/payments", authMW(rlMW(platformReadMW(adminStrip))))
 	mux.Handle("PUT /v1/admin/payments", authMW(rlMW(platformWriteMW(adminStrip))))
+	// 租户级支付配置：每个租户一套渠道凭据（admin 角色即可，数据按 claims.tenant_id 隔离）。
+	// 注意：必须直接挂 handler —— adminStrip 会把 /v1/admin 前缀剥掉，用在 /v1/tenant 上
+	// 只会得到 404（StripPrefix 不匹配时返回 404）。
+	mux.Handle("GET /v1/tenant/payments", authMW(rlMW(adminReadMW(http.HandlerFunc(adminHandler.GetTenantPaymentConfig)))))
+	mux.Handle("PUT /v1/tenant/payments", authMW(rlMW(adminWriteMW(http.HandlerFunc(adminHandler.SaveTenantPaymentConfig)))))
+	// 租户身份能力通知：租户普通用户进入前端时一次性提示（不限管理员）。
+	mux.Handle("GET /v1/tenant/identity-notice", authMW(rlMW(http.HandlerFunc(adminHandler.GetTenantIdentityNotice))))
 
 	// 发票审核（P1-2 / roadmap §11.4）：handler 早已注册在 adminMux（invoice_handler.go
 	// 的 RegisterAdminRoutes），但外层 mux 从未暴露这两个 pattern ⇒ 前端 InvoiceReviewView
 	// 一打开就 404「请求的资源不存在」。读用 adminReadMW；审核是写操作 ⇒ adminWriteMW。
 	mux.Handle("GET /v1/admin/invoices", authMW(rlMW(adminReadMW(adminStrip))))
 	mux.Handle("POST /v1/admin/invoices/{id}/review", authMW(rlMW(adminWriteMW(adminStrip))))
+	// 租户级发票审核：只看/只审本租户用户的申请（admin 角色即可）。
+	mux.Handle("GET /v1/tenant/invoices", authMW(rlMW(adminReadMW(http.HandlerFunc(invoiceHandler.TenantList)))))
+	mux.Handle("POST /v1/tenant/invoices/{id}/review", authMW(rlMW(adminWriteMW(http.HandlerFunc(invoiceHandler.TenantReview)))))
 
 	// 套餐目录 CRUD（P2-2c / roadmap §13.5 第 1 项）。
-	// 读也挂 PermBillingManage 而不是 adminReadMW：能看到定价与权益范围的人，
-	// 应当与能改它的是同一批 —— 否则运营的定价草案会对所有 admin 可见。
-	billingManageMW := RequirePermission(auth.PermBillingManage)
-	mux.Handle("GET /v1/admin/billing/packages", authMW(rlMW(billingManageMW(adminStrip))))
-	mux.Handle("POST /v1/admin/billing/packages", authMW(rlMW(billingManageMW(adminStrip))))
-	mux.Handle("PUT /v1/admin/billing/packages/{id}", authMW(rlMW(billingManageMW(adminStrip))))
+	// 套餐目录：租户级（每个租户一套定价与权益），平台后台不再提供管理页。
+	// 数据按 claims.tenant_id 隔离，admin 角色即可维护。
+	mux.Handle("GET /v1/tenant/packages", authMW(rlMW(adminReadMW(http.HandlerFunc(billingHandler.AdminListPackages)))))
+	// 平台内置套餐模板：租户新建套餐时可预填（只读，不写入租户目录）。
+	mux.Handle("GET /v1/tenant/package-templates", authMW(rlMW(adminReadMW(http.HandlerFunc(billingHandler.ListPackageTemplates)))))
+	// 平台套餐模板管理（owner）：平台后台维护模板本身。
+	mux.Handle("GET /v1/admin/package-templates", authMW(rlMW(platformReadMW(http.HandlerFunc(billingHandler.AdminListPackageTemplates)))))
+	mux.Handle("POST /v1/admin/package-templates", authMW(rlMW(platformWriteMW(http.HandlerFunc(billingHandler.AdminCreatePackageTemplate)))))
+	mux.Handle("PUT /v1/admin/package-templates/{id}", authMW(rlMW(platformWriteMW(http.HandlerFunc(billingHandler.AdminUpdatePackageTemplate)))))
+	mux.Handle("DELETE /v1/admin/package-templates/{id}", authMW(rlMW(platformWriteMW(http.HandlerFunc(billingHandler.AdminDisablePackageTemplate)))))
+	mux.Handle("POST /v1/admin/package-templates/{id}/restore", authMW(rlMW(platformWriteMW(http.HandlerFunc(billingHandler.AdminEnablePackageTemplate)))))
+	mux.Handle("POST /v1/tenant/packages", authMW(rlMW(adminWriteMW(http.HandlerFunc(billingHandler.AdminCreatePackage)))))
+	mux.Handle("PUT /v1/tenant/packages/{id}", authMW(rlMW(adminWriteMW(http.HandlerFunc(billingHandler.AdminUpdatePackage)))))
 	// DELETE = 软下架（enabled=false），POST restore = 重新上架。
-	mux.Handle("DELETE /v1/admin/billing/packages/{id}", authMW(rlMW(billingManageMW(adminStrip))))
-	mux.Handle("POST /v1/admin/billing/packages/{id}/restore", authMW(rlMW(billingManageMW(adminStrip))))
+	mux.Handle("DELETE /v1/tenant/packages/{id}", authMW(rlMW(adminWriteMW(http.HandlerFunc(billingHandler.AdminDisablePackage)))))
+	mux.Handle("POST /v1/tenant/packages/{id}/restore", authMW(rlMW(adminWriteMW(http.HandlerFunc(billingHandler.AdminEnablePackage)))))
 
 	// 租户 / 域名 / 定时任务管理（后台「租户管理」「域名管理」「定时任务」三页）
 	// 与上面 redis/database/models/settings 是**同一个坑的第四次**：handler 早已
@@ -185,13 +202,8 @@ func registerAdminRoutes(
 	mux.Handle("POST /v1/admin/domains/{id}/verify", authMW(rlMW(adminWriteMW(adminStrip))))
 	mux.Handle("POST /v1/admin/domains/{id}/renew-ssl", authMW(rlMW(adminWriteMW(adminStrip))))
 
-	mux.Handle("GET /v1/admin/cron-jobs", authMW(rlMW(adminReadMW(adminStrip))))
-	mux.Handle("POST /v1/admin/cron-jobs", authMW(rlMW(adminWriteMW(adminStrip))))
-	mux.Handle("PUT /v1/admin/cron-jobs/{id}", authMW(rlMW(adminWriteMW(adminStrip))))
-	mux.Handle("DELETE /v1/admin/cron-jobs/{id}", authMW(rlMW(adminWriteMW(adminStrip))))
-	mux.Handle("POST /v1/admin/cron-jobs/{id}/trigger", authMW(rlMW(adminWriteMW(adminStrip))))
-	// 重置 Webhook token：租户级（与其它 cron-jobs 写操作同口径，靠 SQL 的 tenant_id 隔离）。
-	mux.Handle("POST /v1/admin/cron-jobs/{id}/webhook-token", authMW(rlMW(adminWriteMW(adminStrip))))
+	// 定时任务管理面已随 /admin/cron 页面下线；调度器（cron_scheduler.go）仍按
+	// cron_jobs 表运行既有任务，Webhook 触发入口也保持不变。
 
 	// 租户邀请码（F2）：注册时据邀请码决定新用户归属哪个租户。
 	mux.Handle("GET /v1/admin/invites", authMW(rlMW(adminReadMW(adminStrip))))

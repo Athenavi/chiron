@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { ref, computed, h, watch } from 'vue'
+import { ref, computed, h, watch, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '../../stores/auth'
-import { useThemeStore } from '../../stores/theme'
+import ThemeSwitcher from '../../components/ThemeSwitcher.vue'
+import LanguageSwitcher from '../../components/common/LanguageSwitcher.vue'
+import { getUnreadCount } from '../../api/notifications'
 import {
   Layout,
   LayoutSider,
@@ -21,30 +23,20 @@ import {
 } from 'ant-design-vue'
 import {
   DashboardOutlined,
+  HomeOutlined,
   KeyOutlined,
   DatabaseOutlined,
   ThunderboltOutlined,
   SettingOutlined,
-  ClockCircleOutlined,
   BellOutlined,
   UserOutlined,
   LogoutOutlined,
   TeamOutlined,
-  SafetyOutlined,
   FileSearchOutlined,
   MedicineBoxOutlined,
   BarChartOutlined,
-  IdcardOutlined,
-  PayCircleOutlined,
-  ReconciliationOutlined,
-  ControlOutlined,
-  
-  FileTextOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
-  BulbOutlined,
-  
-  MailOutlined,
 } from '@ant-design/icons-vue'
 
 import { useI18n } from 'vue-i18n'
@@ -53,7 +45,6 @@ const { t } = useI18n()
 const router = useRouter()
 const route = useRoute()
 const authStore = useAuthStore()
-const themeStore = useThemeStore()
 
 // 折叠态：桌面端用 v-model，移动端用抽屉
 const collapsed = ref(false)
@@ -81,7 +72,7 @@ const breadcrumbs = computed(() => {
   }))
 })
 
-// 菜单分组：总览监控 / 访问安全 / 系统 / 平台 四组
+// 菜单分组：平台后台只保留平台级能力（租户级配置在 /tenant 下由租户管理员维护）
 const menuGroups = computed(() => [
   {
     key: 'g-monitor', label: t('admin.overview_monitoring'),
@@ -92,45 +83,19 @@ const menuGroups = computed(() => [
     ],
   },
   {
-    key: 'g-access', label: t('common.access_security'),
-    children: [
-      { key: '/admin/api-keys', label: t('common.api_key_management'), icon: () => h(KeyOutlined) },
-      // 原「角色管理 + 群组管理」合并为权限与组织（Tabs）
-      { key: '/admin/access', label: t('errors.permissions_and_organization'), icon: () => h(IdcardOutlined) },
-      // 原「三方登录与人机验证 + 隐私模式管控」合并为认证与防护（Tabs）
-      { key: '/admin/identity', label: t('common.authentication_and_protection'), icon: () => h(SafetyOutlined) },
-      // 邮件发信（邮箱验证码登录 / 注册邮箱验证 / 密码重置）的服务端配置
-      { key: '/admin/mail', label: t('mail.email_config'), icon: () => h(MailOutlined) },
-      // 原「模型策略管控 + 模型路由管控」合并为模型管控（Tabs）
-      { key: '/admin/models', label: t('agent.model_control'), icon: () => h(ControlOutlined) },
-    ],
-  },
-  {
     key: 'g-system', label: t('common.system'),
     children: [
+      { key: '/admin/api-keys', label: t('common.api_key_management'), icon: () => h(KeyOutlined) },
       { key: '/admin/settings', label: t('settings.system_settings'), icon: () => h(SettingOutlined) },
-      // 定时任务：原在仪表盘内，属配置类操作 → 归入系统组
-      { key: '/admin/cron', label: t('task.scheduled_tasks'), icon: () => h(ClockCircleOutlined) },
       // 原「Redis 管理 + 数据库管理」合并为数据存储（Tabs）
       { key: '/admin/datastores', label: t('common.data_storage'), icon: () => h(DatabaseOutlined) },
       // 原「租户管理 + 域名管理」合并为租户与域名（Tabs）
       { key: '/admin/tenancy', label: t('admin.tenants_and_domains'), icon: () => h(TeamOutlined) },
+      // 平台视角只看租户这一级用量；成员级明细在租户管理员后台
+      { key: '/admin/usage', label: t('admin.usage_insights'), icon: () => h(BarChartOutlined) },
       { key: '/admin/audit', label: t('admin.operation_audit'), icon: () => h(FileSearchOutlined) },
       // D1：自诊断 —— 与设置/数据存储同属"系统"类：都是"让部署正确运转"的操作面。
       { key: '/admin/diagnostics', label: t('admin.diagnostics'), icon: () => h(MedicineBoxOutlined) },
-    ],
-  },
-  {
-    key: 'g-platform', label: t('common.platform'),
-    children: [
-      { key: '/admin/payment', label: t('billing.payment_config'), icon: () => h(PayCircleOutlined) },
-      // 团队 / 租户用量 —— 按天看趋势、按成员看谁花得多、owner 可跨租户对比
-      { key: '/admin/usage', label: t('admin.usage_insights'), icon: () => h(BarChartOutlined) },
-      // 发票审核 —— 用户提交的开票申请在这里处理，与支付渠道相邻
-      { key: '/admin/invoices', label: t('admin.invoice_review'), icon: () => h(ReconciliationOutlined) },
-      // 套餐目录 —— 卖什么、多少钱，与支付渠道/发票同属「钱相关」
-      { key: '/admin/packages', label: t('admin.packages_admin_title'), icon: () => h(IdcardOutlined) },
-      { key: '/admin/api-docs', label: t('knowledge.api_documentation'), icon: () => h(FileTextOutlined) },
     ],
   },
 ])
@@ -149,11 +114,29 @@ interface MenuClickInfo {
 }
 
 const userMenuItems = computed<MenuProps['items']>(() => [
+  // 后台不再套全局 AppLayout（否则右上角会叠一套浮动胶囊），
+  // 所以这里补一个显式的"回前台"入口。
+  { key: 'home', label: t('common.home'), icon: () => h(HomeOutlined) },
   { key: 'profile', label: t('settings.profile'), icon: () => h(UserOutlined) },
-  { key: 'toggle-theme', label: themeStore.isDark ? t('common.light_mode') : t('common.dark_mode'), icon: () => h(BulbOutlined) },
   { type: 'divider' as const },
   { key: 'logout', label: t('auth.logout'), icon: () => h(LogoutOutlined) },
 ])
+
+// 通知未读数：侧边栏底部入口上的角标。低频变化的小整数，进页面拉一次即可
+// （与 AppLayout 的 5 分钟轮询同口径；管理后台不需要更实时）。
+const unreadCount = ref(0)
+async function refreshUnread() {
+  try {
+    unreadCount.value = await getUnreadCount()
+  } catch {
+    // 角标失败不该打扰用户：保留 0
+  }
+}
+onMounted(refreshUnread)
+
+function goNotifications() {
+  router.push('/notifications')
+}
 
 function handleMenuClick(info: MenuClickInfo) {
   router.push(String(info.key))
@@ -166,8 +149,8 @@ async function handleUserAction(info: MenuClickInfo) {
     router.push('/login')
   } else if (info.key === 'profile') {
     router.push('/profile')
-  } else if (info.key === 'toggle-theme') {
-    themeStore.toggleTheme()
+  } else if (info.key === 'home') {
+    router.push('/')
   }
 }
 
@@ -218,6 +201,56 @@ const userInitial = computed(() => authStore.user?.name?.charAt(0)?.toUpperCase(
           </template>
         </Menu>
       </div>
+      <!-- 侧栏底部：通知 / 语言 / 主题 / 用户（原右上角功能区下沉到这里） -->
+      <div
+        class="sider-footer"
+        :class="{ 'sider-footer--collapsed': collapsed }"
+      >
+        <button
+          type="button"
+          class="sider-footer-btn"
+          :title="$t('settings.notification')"
+          :aria-label="$t('settings.notification')"
+          @click="goNotifications"
+        >
+          <Badge
+            :count="unreadCount"
+            :overflow-count="99"
+            size="small"
+          >
+            <BellOutlined />
+          </Badge>
+          <span
+            v-if="!collapsed"
+            class="sider-footer-label"
+          >{{ $t('settings.notification') }}</span>
+        </button>
+        <div class="sider-footer-inline">
+          <LanguageSwitcher compact />
+          <ThemeSwitcher />
+        </div>
+        <Dropdown
+          :menu="{ items: userMenuItems, onClick: handleUserAction }"
+          placement="topRight"
+        >
+          <button
+            type="button"
+            class="sider-footer-user"
+            :title="authStore.user?.name || 'Admin'"
+          >
+            <Avatar
+              :size="26"
+              :style="{ backgroundColor: 'var(--primary)', color: 'var(--on-solid)' }"
+            >
+              {{ userInitial }}
+            </Avatar>
+            <span
+              v-if="!collapsed"
+              class="sider-footer-label"
+            >{{ authStore.user?.name || 'Admin' }}</span>
+          </button>
+        </Dropdown>
+      </div>
     </LayoutSider>
 
     <!-- 移动端抽屉 Sider -->
@@ -260,6 +293,46 @@ const userInitial = computed(() => authStore.user?.name?.charAt(0)?.toUpperCase(
           </template>
         </Menu>
       </div>
+      <div class="sider-footer">
+        <button
+          type="button"
+          class="sider-footer-btn"
+          :title="$t('settings.notification')"
+          :aria-label="$t('settings.notification')"
+          @click="goNotifications"
+        >
+          <Badge
+            :count="unreadCount"
+            :overflow-count="99"
+            size="small"
+          >
+            <BellOutlined />
+          </Badge>
+          <span class="sider-footer-label">{{ $t('settings.notification') }}</span>
+        </button>
+        <div class="sider-footer-inline">
+          <LanguageSwitcher compact />
+          <ThemeSwitcher />
+        </div>
+        <Dropdown
+          :menu="{ items: userMenuItems, onClick: handleUserAction }"
+          placement="topRight"
+        >
+          <button
+            type="button"
+            class="sider-footer-user"
+            :title="authStore.user?.name || 'Admin'"
+          >
+            <Avatar
+              :size="26"
+              :style="{ backgroundColor: 'var(--primary)', color: 'var(--on-solid)' }"
+            >
+              {{ userInitial }}
+            </Avatar>
+            <span class="sider-footer-label">{{ authStore.user?.name || 'Admin' }}</span>
+          </button>
+        </Dropdown>
+      </div>
     </LayoutSider>
     <div
       v-if="isMobile && drawerOpen"
@@ -289,40 +362,6 @@ const userInitial = computed(() => authStore.user?.name?.charAt(0)?.toUpperCase(
               {{ item.title }}
             </BreadcrumbItem>
           </Breadcrumb>
-        </div>
-        <div class="header-actions">
-          <Badge
-            :count="0"
-            :overflow-count="99"
-          >
-            <Button
-              type="text"
-              class="header-btn"
-              :title="$t('settings.notification')"
-              :aria-label="$t('settings.notification')"
-            >
-              <template #icon>
-                <BellOutlined />
-              </template>
-            </Button>
-          </Badge>
-          <Dropdown
-            :menu="{ items: userMenuItems, onClick: handleUserAction }"
-            placement="bottomRight"
-          >
-            <div
-              class="header-user"
-              :title="$t('admin.user_menu')"
-            >
-              <Avatar
-                :size="30"
-                :style="{ backgroundColor: 'var(--primary)', color: 'var(--on-solid)' }"
-              >
-                {{ userInitial }}
-              </Avatar>
-              <span class="header-user-name">{{ authStore.user?.name || 'Admin' }}</span>
-            </div>
-          </Dropdown>
         </div>
       </LayoutHeader>
       <LayoutContent class="admin-content">
@@ -439,6 +478,58 @@ const userInitial = computed(() => authStore.user?.name?.charAt(0)?.toUpperCase(
   font-weight: var(--fw-semibold);
 }
 .sider-menu :deep(.ant-menu-item-selected::after) { display: none; }
+
+/* ── 侧栏底部：通知 / 语言 / 主题 / 用户 ── */
+.sider-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border-top: var(--hairline-width) solid var(--border);
+  flex-shrink: 0;
+}
+.sider-footer-btn,
+.sider-footer-user {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 13px;
+  text-align: start;
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background var(--dur-fast) ease, color var(--dur-fast) ease;
+}
+.sider-footer-btn:hover,
+.sider-footer-user:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.sider-footer-inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 8px;
+}
+.sider-footer-label {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.sider-footer--collapsed .sider-footer-btn,
+.sider-footer--collapsed .sider-footer-user {
+  justify-content: center;
+  padding: 6px 0;
+}
+.sider-footer--collapsed .sider-footer-inline {
+  justify-content: center;
+  padding: 2px 0;
+}
 
 /* ── Header ── */
 .admin-header {

@@ -25,6 +25,7 @@ credits per 1000 tokens），对所有模型一视同仁 —— 而不同模型�
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from dataclasses import dataclass
@@ -175,32 +176,72 @@ def _close_enough(a: ModelPrice, b: ModelPrice, tolerance: float) -> bool:
 def cross_validate(
     per_source: dict[str, dict[str, ModelPrice]], *, tolerance: float = DEFAULT_TOLERANCE
 ) -> tuple[list[ModelPrice], list[str]]:
-    """多源比对：至少**两个源**给出容差内一致的价格才收。
+    """多源比对：只返回**通过印证**（≥2 源在容差内一致）的价格。
 
-    返回 ``(可写入的价格, 分歧描述)``。分歧**不写入**（见模块头：宁可缺数据）—— 但也**不静默**：
-    描述会进日志与指标，否则"价格表一直是空的"没人知道为什么。
+    单源与分歧的结果被过滤掉；需要"全部模型 + 可信度标记"时用 :func:`collect_offers`
+    （价格目录实际用的是它 —— 只显示已验证的模型会让页面少掉一大半）。
+    """
+    offers, disagreements = collect_offers(per_source, tolerance=tolerance)
+    return [offer.price for offer in offers if offer.verified], disagreements
+
+
+@dataclass(frozen=True)
+class PriceOffer:
+    """一个模型的完整报价：代表价格 + 参与来源明细 + 是否通过多源印证。"""
+
+    price: ModelPrice
+    sources: tuple[str, ...]
+    verified: bool
+    details: tuple[dict[str, Any], ...]
+
+    @property
+    def source_count(self) -> int:
+        return len(self.sources)
+
+
+def collect_offers(
+    per_source: dict[str, dict[str, ModelPrice]], *, tolerance: float = DEFAULT_TOLERANCE
+) -> tuple[list[PriceOffer], list[str]]:
+    """把多源结果整理成「每个模型一行」，单源/分歧也保留（``verified=False``）。
+
+    与旧逻辑的差别：旧实现单源与分歧一律丢弃，于是价格目录里只剩"两个源恰好一致"
+    的模型（实测 38 条），大量模型根本不可见。现在**全部写入**，用 ``verified`` 区分
+    可信度，并保留每个源各自的价格（``details``）供页面展开查看。
     """
     by_model: dict[str, list[tuple[str, ModelPrice]]] = {}
     for source, prices in per_source.items():
         for norm, price in prices.items():
             by_model.setdefault(norm, []).append((source, price))
 
-    agreed: list[ModelPrice] = []
+    offers: list[PriceOffer] = []
     disagreements: list[str] = []
     for norm, entries in sorted(by_model.items()):
-        if len(entries) < 2:
-            # 只有一个源 —— **不写入**：单源无法交叉验证，写进去就等于给一个未验证的数字背书。
-            MODEL_PRICE_SYNC.labels(outcome="single_source", source=entries[0][0]).inc()
-            continue
+        entries.sort(key=lambda item: item[0])
         first_source, first = entries[0]
-        if all(_close_enough(first, other, tolerance) for _, other in entries[1:]):
-            agreed.append(first)
+        agreed = len(entries) >= 2 and all(
+            _close_enough(first, other, tolerance) for _, other in entries[1:]
+        )
+        details = tuple(
+            {
+                "source": src,
+                "input_per_1k": round(p.input_per_1k, 6),
+                "output_per_1k": round(p.output_per_1k, 6),
+            }
+            for src, p in entries
+        )
+        sources = tuple(sorted({src for src, _ in entries}))
+        if agreed:
             MODEL_PRICE_SYNC.labels(outcome="agreed", source=first_source).inc()
-            continue
-        detail = ", ".join(f"{src}={p.input_per_1k:.4f}/{p.output_per_1k:.4f}" for src, p in entries)
-        disagreements.append(f"{norm}: {detail}")
-        MODEL_PRICE_SYNC.labels(outcome="disagreement", source=first_source).inc()
-    return agreed, disagreements
+        elif len(entries) == 1:
+            MODEL_PRICE_SYNC.labels(outcome="single_source", source=first_source).inc()
+        else:
+            detail = ", ".join(f"{src}={p.input_per_1k:.4f}/{p.output_per_1k:.4f}" for src, p in entries)
+            disagreements.append(f"{norm}: {detail}")
+            MODEL_PRICE_SYNC.labels(outcome="disagreement", source=first_source).inc()
+        offers.append(
+            PriceOffer(price=first, sources=sources, verified=agreed, details=details)
+        )
+    return offers, disagreements
 
 
 async def _fetch_source(name: str, url: str, *, timeout: float = 20.0) -> dict[str, Any] | None:
@@ -258,10 +299,10 @@ async def _fetch_source_group(name: str, urls: tuple[str, ...]) -> dict[str, Mod
 
 
 async def sync_once() -> tuple[int, list[str]]:
-    """拉全部源 → 交叉验证 → 写入。返回 ``(写入行数, 分歧描述)``。
+    """拉全部源 → 整理每个模型的可信度 → 写入。返回 ``(写入行数, 分歧描述)``。
 
-    ⚠ **至少要有两个源成功**才做交叉验证：只有一个源时 :func:`cross_validate` 会把所有模型
-    都判成 `single_source` ⇒ 一行都不写（这是**正确**的降级：宁可这轮不更新，也不写入未验证值）。
+    单源模型与源间有分歧的模型**也会写入**，只是 ``verified=False`` —— 价格目录要回答
+    "市场上大致什么价"，把未验证的模型全部藏起来会让页面只剩零星几条（实测 38 行）。
     """
     fetched: dict[str, dict[str, ModelPrice]] = {}
     for name, urls in SOURCES:
@@ -272,18 +313,18 @@ async def sync_once() -> tuple[int, list[str]]:
         MODEL_PRICE_SYNC.labels(outcome="no_source", source="-").inc()
         return 0, []
 
-    agreed, disagreements = cross_validate(fetched)
+    offers, disagreements = collect_offers(fetched)
     if disagreements:
         # 不静默：分歧要么是源过期、要么是我们对齐错了 —— 两种都需要人看一眼。
         logger.warning("model price disagreements (%d): %s", len(disagreements), "; ".join(disagreements[:5]))
 
-    written = await _upsert(agreed, sources=sorted(fetched))
+    written = await _upsert(offers)
     return written, disagreements
 
 
-async def _upsert(prices: list[ModelPrice], *, sources: list[str]) -> int:
-    """把验证过的价格写进 `model_prices`（表缺失 / 库不可用 ⇒ 记一次告警并放弃）。"""
-    if not prices:
+async def _upsert(offers: list[PriceOffer]) -> int:
+    """把每个模型的报价写进 `model_prices`（表缺失 / 库不可用 ⇒ 记一次告警并放弃）。"""
+    if not offers:
         return 0
     from app.db import get_pool  # 与其它 PG 访问同一条连接池入口
 
@@ -291,31 +332,34 @@ async def _upsert(prices: list[ModelPrice], *, sources: list[str]) -> int:
     if pool is None:
         MODEL_PRICE_SYNC.labels(outcome="db_unavailable", source="-").inc()
         return 0
-    src = ",".join(sources)
     written = 0
     try:
         async with pool.acquire() as conn:
-            for price in prices:
+            for offer in offers:
                 await conn.execute(
                     """
                     INSERT INTO model_prices
                         (model, provider, input_per_1k, output_per_1k, sources, source_count,
-                         verified_at, updated_at)
-                    VALUES ($1, $2, $3, $4, $5, $6, now(), now())
+                         verified, source_details, verified_at, updated_at)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, now(), now())
                     ON CONFLICT (model, provider) DO UPDATE SET
                         input_per_1k = EXCLUDED.input_per_1k,
                         output_per_1k = EXCLUDED.output_per_1k,
                         sources = EXCLUDED.sources,
                         source_count = EXCLUDED.source_count,
+                        verified = EXCLUDED.verified,
+                        source_details = EXCLUDED.source_details,
                         verified_at = now(),
                         updated_at = now()
                     """,
-                    price.model,
-                    price.provider,
-                    price.input_per_1k,
-                    price.output_per_1k,
-                    src,
-                    len(sources),
+                    offer.price.model,
+                    offer.price.provider,
+                    offer.price.input_per_1k,
+                    offer.price.output_per_1k,
+                    ",".join(offer.sources),
+                    offer.source_count,
+                    offer.verified,
+                    json.dumps(list(offer.details), ensure_ascii=False),
                 )
                 written += 1
     except Exception as exc:  # noqa: BLE001 — 未迁移的库只该丢这张表，不该让任务崩

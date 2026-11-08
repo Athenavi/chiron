@@ -928,33 +928,48 @@ class AgentRuntime:
 
     @staticmethod
     def _context_breakdown(
-        messages: list[dict[str, Any]], model: str = "", *, top_n: int = 5
+        messages: list[dict[str, Any]],
+        model: str = "",
+        *,
+        tools: list[dict[str, Any]] | None = None,
+        top_n: int = 5,
     ) -> tuple[dict[str, int], list[dict[str, Any]]]:
-        """按**消息类别**给上下文分段，并给出占用最大的几条。
+        """按**上下文来源**分段：系统提示 / 工具定义 / 你的输入 / 模型回复 / 工具输出。
 
-        返回 `(每类合计, 最大的 top_n 条)`，两者出自**同一遍遍历** —— 分两处算必然漂移。
+        返回 `(每类合计, 最大的 top_n 条)`，两者出自**同一遍估算** —— 分两处算必然漂移。
+        工具定义不在 messages 里（它是单独的参数），所以单独估算后并入 `tools` 档；
+        否则"上下文被什么占满"会永远漏掉可能最大的一块（长工具表轻松上万 token）。
+        分段是**估算**：`used` 是服务商回报的真实 input tokens，两者不必逐 token 相等。
+
         `largest` 只报类别、角色与估算大小，**不含消息内容**：这份数据要送到前端，而消息
         正文可能含用户隐私；"是谁占的"用大小与来源足以回答（与上游 2.41 的取舍一致）。
         """
         buckets: dict[str, int] = {
             "system": 0,
-            "history": 0,
+            "tools": 0,
+            "user": 0,
+            "assistant": 0,
             "tool_results": 0,
-            "current": 0,
         }
         items: list[dict[str, Any]] = []
-        last = len(messages) - 1
-        for i, m in enumerate(messages):
+        if tools:
+            # 与消息同一套估算口径（_estimate_tokens 会按模型窗口校准密度），
+            # 避免"分段之和与 used 差得离谱"。
+            schema_text = json.dumps(tools, ensure_ascii=False, default=str)
+            n = _estimate_tokens([{"role": "system", "content": schema_text}], model)
+            buckets["tools"] = n
+            items.append({"class": "tools", "role": "tools", "tokens": n})
+        for m in messages:
             role = m.get("role", "")
             n = _estimate_tokens([m], model)
             if role == "system":
                 cls = "system"
             elif role == "tool":
                 cls = "tool_results"
-            elif i == last:
-                cls = "current"
+            elif role == "assistant":
+                cls = "assistant"
             else:
-                cls = "history"
+                cls = "user"
             buckets[cls] += n
             items.append({"class": cls, "role": str(role or ""), "tokens": n})
         items.sort(key=lambda x: int(x["tokens"]), reverse=True)
@@ -1006,6 +1021,7 @@ class AgentRuntime:
         mode_cfg: ModeConfig,
         llm_config: dict[str, Any],
         messages: list[dict[str, Any]] | None = None,
+        tools: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """上下文占用快照：`used`/`limit` + **压缩阈值** + 分段。
 
@@ -1019,7 +1035,7 @@ class AgentRuntime:
         breakdown: dict[str, int] = {}
         largest: list[dict[str, Any]] = []
         if messages:
-            breakdown, largest = self._context_breakdown(messages, model)
+            breakdown, largest = self._context_breakdown(messages, model, tools=tools)
         return {
             "used": used,
             "limit": limit,
@@ -2867,6 +2883,7 @@ class AgentRuntime:
                     mode_cfg=mode_cfg,
                     llm_config=task.llm_config,
                     messages=messages,
+                    tools=tools,
                 ),
                 cache=self._prefix_change(messages, tools),
                 trace_id=trace_id,

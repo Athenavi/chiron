@@ -49,7 +49,7 @@ func (m *notifyMailer) SendNotification(ctx context.Context, userID, subject, bo
 		return nil
 	}
 
-	row, err := m.mail.loadConfig(ctx)
+	row, err := m.mail.loadConfigForEmail(ctx, email)
 	if err != nil {
 		return fmt.Errorf("load mail config: %w", err)
 	}

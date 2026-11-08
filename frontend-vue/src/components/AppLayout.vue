@@ -12,6 +12,7 @@ import {
   Menu,
   Modal,
   message,
+  notification,
 } from 'ant-design-vue'
 // Ant Design 图标
 import {
@@ -31,6 +32,7 @@ import {
   RobotOutlined,
   AppstoreOutlined,
   
+  TeamOutlined,
   ApiOutlined,
 } from '@ant-design/icons-vue'
 import CommandPalette from './CommandPalette.vue'
@@ -38,6 +40,7 @@ import ThemeSwitcher from './ThemeSwitcher.vue'
 import LanguageSwitcher from './common/LanguageSwitcher.vue'
 import SettingsPanel from './settings/SettingsPanel.vue'
 import { getUnreadCount } from '../api/notifications'
+import { getIdentityNotice } from '../api/admin'
 import { buildAccountMenuItems, accountMenuRoute, type AccountMenuItem } from './accountMenu'
 import {
   WORKSTATION_DESCRIPTIONS,
@@ -83,12 +86,28 @@ async function refreshUnread() {
   }
 }
 
+// 租户管理员启用身份能力（SSO / 人机验证 / 短信）后，给该租户用户提示一次；
+// fingerprint 变化（例如新增提供商）才再次提示，而不是每次进入都打扰。
+const IDENTITY_NOTICE_KEY = 'chiron.identity-notice'
+async function maybeNotifyIdentity() {
+  const notice = await getIdentityNotice()
+  if (!notice?.enabled) return
+  if (localStorage.getItem(IDENTITY_NOTICE_KEY) === notice.fingerprint) return
+  localStorage.setItem(IDENTITY_NOTICE_KEY, notice.fingerprint)
+  notification.info({
+    message: tr('admin.identity_notice_title'),
+    description: tr('admin.identity_notice_desc', { providers: notice.providers }),
+    duration: 8,
+  })
+}
+
 onMounted(() => {
   window.addEventListener('api:error', handleApiError)
   if (authStore.token) {
     authStore.fetchProfile()
   }
   refreshUnread()
+  void maybeNotifyIdentity()
   unreadTimer = setInterval(refreshUnread, 5 * 60 * 1000)
   // 从通知页返回时立刻刷新一次，避免角标滞后一整个轮询周期。
   window.addEventListener('notification:read', refreshUnread)
@@ -129,6 +148,8 @@ const menuItems = computed<MenuItem[]>(() => {
       ? [
           // 模型配置：决定对话页模型下拉里能选到什么（后端 /v1/admin/models，需管理员）
           { key: '/models', label: tr('agent.model'), icon: () => h(ApiOutlined) },
+          // 租户管理员后台：本租户的身份/支付/发票/域名/成员/用量
+          { key: '/tenant', label: tr('admin.tenant_console'), icon: () => h(TeamOutlined) },
           { key: '/admin', label: tr('common.manage'), icon: () => h(SettingOutlined) },
         ]
       : []),

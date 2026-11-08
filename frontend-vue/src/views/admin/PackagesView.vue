@@ -113,6 +113,20 @@
       @cancel="closeForm"
     >
       <div class="form">
+        <div
+          v-if="!form.id"
+          class="field"
+        >
+          <label>{{ $t('admin.package_template') }}</label>
+          <Select
+            v-model:value="templateCode"
+            :options="templates.map(p => ({ value: p.code, label: `${p.name} (${p.code})` }))"
+            :placeholder="$t('admin.package_template_hint')"
+            allow-clear
+            @change="applyTemplate"
+          />
+        </div>
+
         <div class="field">
           <label>{{ $t('admin.packages_admin_code') }}</label>
           <!-- 编辑态禁用：code 是 payments.package_code 的引用值，改了会让
@@ -242,6 +256,7 @@ import {
   createAdminPackage,
   disableAdminPackage,
   listAdminPackages,
+  listPackageTemplates,
   restoreAdminPackage,
   updateAdminPackage,
   type AdminPackage,
@@ -255,6 +270,8 @@ const { t } = useI18n()
 const loading = ref(false)
 const saving = ref(false)
 const rows = ref<AdminPackage[]>([])
+const templates = ref<AdminPackage[]>([])
+const templateCode = ref('')
 const disableTarget = ref<AdminPackage | null>(null)
 
 /** 可选模型清单。取模型发现接口，与用户侧过滤口径同源。 */
@@ -339,7 +356,33 @@ function resetForm() {
 
 function openCreate() {
   resetForm()
+  templateCode.value = ''
   form.open = true
+}
+
+/** 平台内置模板：只读取，用于新建时预填（保存时仍写入本租户自己的目录）。 */
+async function loadTemplates() {
+  try {
+    templates.value = await listPackageTemplates()
+  } catch {
+    templates.value = []
+  }
+}
+
+function applyTemplate(value: unknown) {
+  const code = typeof value === 'string' ? value : ''
+  if (!code) return
+  const tpl = templates.value.find(p => p.code === code)
+  if (!tpl) return
+  form.code = tpl.code
+  form.name = tpl.name
+  form.credits = tpl.credits
+  form.price_cents = tpl.price_cents
+  form.currency = tpl.currency || 'CNY'
+  form.duration_days = tpl.duration_days
+  form.allowed_models = [...(tpl.allowed_models ?? [])]
+  form.sort_order = tpl.sort_order ?? 0
+  message.success(t('admin.package_template_applied'))
 }
 
 /** antd 的 bodyCell 把 record 声明为宽松类型，这里收窄一次。 */
@@ -448,6 +491,7 @@ function formatAmount(cents: number, currency?: string): string {
 onMounted(() => {
   load()
   loadModels()
+  loadTemplates()
 })
 </script>
 

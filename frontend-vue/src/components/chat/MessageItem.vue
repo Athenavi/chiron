@@ -7,10 +7,10 @@ import 'highlight.js/styles/github.css'
 import texmath from 'markdown-it-texmath'
 import katex from 'katex'
 import { computed, ref, watch, onMounted, onUpdated, onBeforeUnmount } from 'vue'
-import { Input } from 'ant-design-vue'
+import { Input, Modal } from 'ant-design-vue'
 import { notify } from '../../utils/notify'
 import { fileTypeBadge, splitFileName, type SplitName } from '../../utils/fileName'
-import { CopyOutlined, CheckOutlined, EditOutlined, ReloadOutlined, LikeOutlined, DislikeOutlined, LikeFilled, DislikeFilled, CommentOutlined, WalletOutlined, BarChartOutlined } from '@ant-design/icons-vue'
+import { CopyOutlined, CheckOutlined, EditOutlined, ReloadOutlined, LikeOutlined, DislikeOutlined, LikeFilled, DislikeFilled, CommentOutlined, WalletOutlined, BarChartOutlined, DownloadOutlined } from '@ant-design/icons-vue'
 import ReasoningBlock from './ReasoningBlock.vue'
 import { inkCharsFor, inkIndexFor } from './ink'
 import ToolCallCard from './ToolCallCard.vue'
@@ -578,6 +578,82 @@ function openAttachment(att: ChatAttachment, e: MouseEvent) {
   else void openLightboxFrom(el, { src: attachmentUrl(att), alt: att.name })
 }
 
+// ── 附件预览 ──────────────────────────────────────────────────────
+// 点击文件名不再把"打开还是下载"的决定权交给浏览器（.py/.md/.docx 在不同浏览器里
+// 可能直接下载）。文本/代码类统一在应用内弹层预览，其余类型再退回新标签。
+const previewOpen = ref(false)
+const previewLoading = ref(false)
+const previewName = ref('')
+const previewText = ref('')
+/** text=文本/代码；pdf=内嵌 PDF；unsupported=无法在线预览（给下载入口） */
+const previewMode = ref<'text' | 'pdf' | 'unsupported'>('text')
+const previewUrl = ref('')
+const PREVIEW_MAX_BYTES = 512 * 1024
+const TEXT_PREVIEW_EXTS = new Set([
+  'txt', 'md', 'markdown', 'json', 'jsonl', 'csv', 'tsv', 'log', 'yml', 'yaml', 'toml',
+  'ini', 'conf', 'env', 'js', 'mjs', 'cjs', 'ts', 'tsx', 'jsx', 'vue', 'py', 'go', 'rs',
+  'java', 'kt', 'kts', 'c', 'h', 'cc', 'cpp', 'hpp', 'cs', 'rb', 'php', 'sh', 'bash',
+  'zsh', 'ps1', 'sql', 'html', 'htm', 'css', 'scss', 'less', 'xml', 'svg', 'ipynb',
+])
+
+/** 无法在浏览器里渲染的二进制类型：不进预览，直接给下载入口（不跳转）。 */
+const BINARY_NO_PREVIEW_EXTS = new Set([
+  'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'zip', 'rar', '7z', 'tar', 'gz',
+  'exe', 'msi', 'dmg', 'iso', 'bin', 'apk', 'ipa', 'woff', 'woff2', 'ttf', 'otf',
+])
+
+function fileExtOf(name: string): string {
+  const i = name.lastIndexOf('.')
+  return i >= 0 ? name.slice(i + 1).toLowerCase() : ''
+}
+
+async function openAttachmentPreview(att: ChatAttachment) {
+  const url = attachmentUrl(att)
+  const ext = fileExtOf(att.name)
+  previewName.value = att.name
+  previewText.value = ''
+  previewUrl.value = url
+  previewOpen.value = true
+
+  // PDF 直接内嵌（浏览器自带阅读器）；二进制办公文档无法在线渲染，明确提示下载。
+  // **任何分支都不 window.open**：那会把用户甩到浏览器新标签，正是"点了就跳走"的来源。
+  if (ext === 'pdf') {
+    previewMode.value = 'pdf'
+    return
+  }
+  if (BINARY_NO_PREVIEW_EXTS.has(ext)) {
+    previewMode.value = 'unsupported'
+    return
+  }
+
+  previewMode.value = 'text'
+  previewLoading.value = true
+  try {
+    const res = await fetch(url)
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    // 扩展名白名单之外再按 Content-Type 兜一层：有些附件名没有后缀（或写错），
+    // 但服务端仍会按 text/* / json / xml 返回，应该照样能预览。
+    const ct = (res.headers.get('content-type') || '').toLowerCase()
+    const isText = TEXT_PREVIEW_EXTS.has(ext)
+      || ct.startsWith('text/')
+      || ct.includes('json')
+      || ct.includes('xml')
+    if (!isText) {
+      previewMode.value = 'unsupported'
+      return
+    }
+    const text = await res.text()
+    previewText.value = text.length > PREVIEW_MAX_BYTES
+      ? `${text.slice(0, PREVIEW_MAX_BYTES)}\n\n${t('chat.preview_truncated')}`
+      : text
+  } catch {
+    // 拉不到内容也不跳走：在弹层里给下载入口，用户仍能拿到文件。
+    previewMode.value = 'unsupported'
+  } finally {
+    previewLoading.value = false
+  }
+}
+
 /**
  * 正文增强（图表渲染 + 代码高亮）：只在 DOM 完成 patch 后触发，内容变化由 onUpdated 覆盖。
  * 两者都是纯增强 —— 加载或渲染失败时正文保持可读，不影响消息本身。
@@ -714,22 +790,40 @@ onUpdated(enhanceContent)
               </audio>
               <span class="att-audio-name">{{ att.name }}</span>
             </div>
-            <a
+            <div
               v-else
-              :href="attachmentUrl(att)"
-              :download="att.name"
-              :title="att.name"
               class="msg-attachment-file"
+              :title="att.name"
             >
-              <!-- 类型徽标取代通用文件图标：TS / PY / PDF 一眼可辨 -->
-              <span class="file-type-badge">{{ fileTypeBadge(att.name) }}</span>
-              <!-- 双向中间截断：让位只发生在中间，扩展名与尾部词干永远可见。
-                   两段紧挨着写在同一行，视觉上仍是一个连续的文件名。 -->
-              <span class="att-name">
-                <span class="att-name-head">{{ attName(att.id).head }}</span><span class="att-name-tail">{{ attName(att.id).tail }}</span>
-              </span>
-              <span class="att-size">{{ formatSize(att.size) }}</span>
-            </a>
+              <!-- 点击文件名 → 应用内预览（文本/代码弹层；其余类型新标签）；下载是右侧独立按钮。
+                   此前整张卡片就是 `<a download>`，点一下直接落到下载目录 —— 想看一眼
+                   内容却被强制存档，是这次要修的行为。 -->
+              <button
+                type="button"
+                class="att-open"
+                :title="att.name"
+                @click="openAttachmentPreview(att)"
+              >
+                <!-- 类型徽标取代通用文件图标：TS / PY / PDF 一眼可辨 -->
+                <span class="file-type-badge">{{ fileTypeBadge(att.name) }}</span>
+                <!-- 双向中间截断：让位只发生在中间，扩展名与尾部词干永远可见。
+                     两段紧挨着写在同一行，视觉上仍是一个连续的文件名。 -->
+                <span class="att-name">
+                  <span class="att-name-head">{{ attName(att.id).head }}</span><span class="att-name-tail">{{ attName(att.id).tail }}</span>
+                </span>
+                <span class="att-size">{{ formatSize(att.size) }}</span>
+              </button>
+              <a
+                :href="attachmentUrl(att)"
+                :download="att.name"
+                class="att-download"
+                :title="$t('common.download')"
+                :aria-label="$t('common.download')"
+                @click.stop
+              >
+                <DownloadOutlined />
+              </a>
+            </div>
           </template>
         </div>
         <!-- 自动轮注入的消息：标出来源，别让用户以为是自己发的提问
@@ -983,6 +1077,44 @@ onUpdated(enhanceContent)
     <span class="notice-icon" aria-hidden="true">{{ item.tone === 'warning' ? '⚠' : 'ℹ' }}</span>
     <span class="notice-text">{{ item.content }}</span>
   </div>
+
+  <!-- 附件预览：全部在应用内完成（文本/代码弹层、PDF 内嵌、二进制给下载入口），
+       不再 window.open 跳到浏览器新标签 -->
+  <Modal
+    v-model:open="previewOpen"
+    :title="previewName"
+    :footer="null"
+    :width="820"
+    destroy-on-close
+  >
+    <div
+      v-if="previewLoading"
+      class="att-preview-loading"
+    >
+      {{ $t('common.loading') }}
+    </div>
+    <iframe
+      v-else-if="previewMode === 'pdf'"
+      :src="previewUrl"
+      class="att-preview-frame"
+      :title="previewName"
+    />
+    <div
+      v-else-if="previewMode === 'unsupported'"
+      class="att-preview-unsupported"
+    >
+      <p>{{ $t('chat.preview_unsupported') }}</p>
+      <a
+        :href="previewUrl"
+        :download="previewName"
+        class="att-preview-download"
+      >{{ $t('common.download') }}</a>
+    </div>
+    <pre
+      v-else
+      class="att-preview-pre"
+    >{{ previewText }}</pre>
+  </Modal>
 </template>
 
 <style scoped>
@@ -1270,8 +1402,18 @@ onUpdated(enhanceContent)
 /* ── 附件展示 ── */
 .msg-attachments { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .msg-attachment-img { max-width: 200px; max-height: 200px; border-radius: var(--sig-radius-card); border: var(--hairline-width) solid var(--border); object-fit: cover; }
-.msg-attachment-file { display: inline-flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: var(--sig-radius-card); box-shadow: inset 0 0 0 var(--hairline-width) var(--border); background: var(--bg-card); color: var(--text-secondary); text-decoration: none; font-size: 13px; transition: box-shadow var(--dur-fast) ease, color var(--dur-fast) ease; }
-.msg-attachment-file:hover { box-shadow: inset 0 0 0 var(--hairline-width) var(--primary); color: var(--primary); }
+/* 卡片本体是容器（不再是 <a download>）：点文件名预览，右侧小按钮才下载。 */
+.msg-attachment-file { display: inline-flex; align-items: center; gap: 2px; padding: 2px; border-radius: var(--sig-radius-card); box-shadow: inset 0 0 0 var(--hairline-width) var(--border); background: var(--bg-card); font-size: 13px; transition: box-shadow var(--dur-fast) ease; }
+.msg-attachment-file:hover { box-shadow: inset 0 0 0 var(--hairline-width) var(--primary); }
+.att-open { display: inline-flex; align-items: center; gap: 8px; padding: 6px 8px; color: var(--text-secondary); background: none; border: none; font: inherit; text-align: start; cursor: pointer; transition: color var(--dur-fast) ease; }
+.att-open:hover { color: var(--primary); }
+.att-preview-loading { padding: 24px; text-align: center; color: var(--text-tertiary); font-size: var(--fs-xs); }
+.att-preview-pre { max-height: 65vh; overflow: auto; margin: 0; padding: 12px; font-family: var(--font-mono); font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+.att-preview-frame { width: 100%; height: 65vh; border: none; border-radius: var(--radius-md); background: var(--bg-card); }
+.att-preview-unsupported { padding: 24px; text-align: center; color: var(--text-secondary); font-size: var(--fs-sm); }
+.att-preview-download { display: inline-flex; align-items: center; margin-top: 12px; padding: 6px 14px; border-radius: var(--radius-md); background: var(--primary); color: var(--on-solid); text-decoration: none; }
+.att-download { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: var(--radius-md); color: var(--text-tertiary); text-decoration: none; transition: color var(--dur-fast) ease, background var(--dur-fast) ease; }
+.att-download:hover { color: var(--primary); background: var(--bg-hover); }
 /* 双向中间截断：head 允许被省略，tail（尾部词干 + 扩展名）
    锁成不收缩。两段之间不留空隙，看起来仍是一个连续的文件名。 */
 .msg-attachment-file .att-name { display: flex; min-width: 0; max-width: 180px; }

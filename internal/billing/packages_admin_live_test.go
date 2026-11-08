@@ -27,6 +27,7 @@ func TestLiveAdminPackageCRUD(t *testing.T) {
 
 	pool := setupLivePool(t, ctx, dsn)
 	store := NewPGStore()
+	const tenantID = 1
 
 	// ux_billing_packages_code 是全站唯一索引，上次失败运行可能残留同 code 的行。
 	suffix := id.NextID()
@@ -48,6 +49,7 @@ func TestLiveAdminPackageCRUD(t *testing.T) {
 
 	// ── CreatePackage：主键在 store 内生成，调用方不该自己拼 ──
 	pkg := &Package{
+		TenantID:      tenantID,
 		Code:          code,
 		Name:          "后台建包",
 		Credits:       1500,
@@ -66,7 +68,7 @@ func TestLiveAdminPackageCRUD(t *testing.T) {
 	}
 
 	// 落库内容必须与入参一致（allowed_models 是 text[]，容易在扫描/写入时出错）。
-	got, err := store.PackageByCode(ctx, code)
+	got, err := store.PackageByCode(ctx, tenantID, code)
 	if err != nil {
 		t.Fatalf("PackageByCode: %v", err)
 	}
@@ -81,7 +83,7 @@ func TestLiveAdminPackageCRUD(t *testing.T) {
 	}
 
 	// ── CreatePackage 撞码：必须返回可判定的哨兵错误，handler 才能区分 409/500 ──
-	dup := &Package{Code: code, Name: "重复", Credits: 1, DurationDays: 1, Enabled: true}
+	dup := &Package{TenantID: tenantID, Code: code, Name: "重复", Credits: 1, DurationDays: 1, Enabled: true}
 	if err := store.CreatePackage(ctx, dup); !errors.Is(err, ErrPackageCodeExists) {
 		t.Fatalf("重复 code 应返回 ErrPackageCodeExists，实际: %v", err)
 	}
@@ -90,14 +92,14 @@ func TestLiveAdminPackageCRUD(t *testing.T) {
 	pkg.PriceCents = 2300
 	pkg.Name = "后台改包"
 	pkg.Credits = 2500
-	found, err := store.UpdatePackage(ctx, pkg)
+	found, err := store.UpdatePackage(ctx, tenantID, pkg)
 	if err != nil {
 		t.Fatalf("UpdatePackage: %v", err)
 	}
 	if !found {
 		t.Fatal("UpdatePackage 说 id 不存在，但它刚被创建")
 	}
-	got, err = store.PackageByCode(ctx, code)
+	got, err = store.PackageByCode(ctx, tenantID, code)
 	if err != nil || got == nil {
 		t.Fatalf("更新后回查失败: %v", err)
 	}
@@ -110,15 +112,15 @@ func TestLiveAdminPackageCRUD(t *testing.T) {
 	// 这是刻意的设计（见 UpdatePackage 注释）：code 是 `payments.package_code`
 	// 的引用值，改掉会让未确认的订单查不到套餐。所以这里断言的不是"撞唯一索引"，
 	// 而是"code 纹丝不动" —— 传什么进去都不该改变它。
-	other := &Package{Code: otherCode, Name: "另一个包", Credits: 100, DurationDays: 10, Enabled: true}
+	other := &Package{TenantID: tenantID, Code: otherCode, Name: "另一个包", Credits: 100, DurationDays: 10, Enabled: true}
 	if err := store.CreatePackage(ctx, other); err != nil {
 		t.Fatalf("建第二个包: %v", err)
 	}
 	pkg.Code = otherCode // 假装调用方试图改 code
-	if found, err := store.UpdatePackage(ctx, pkg); err != nil || !found {
+	if found, err := store.UpdatePackage(ctx, tenantID, pkg); err != nil || !found {
 		t.Fatalf("改 code 的更新不该失败: found=%v err=%v", found, err)
 	}
-	got, err = store.PackageByCode(ctx, code)
+	got, err = store.PackageByCode(ctx, tenantID, code)
 	if err != nil {
 		t.Fatalf("回查: %v", err)
 	}
@@ -126,14 +128,14 @@ func TestLiveAdminPackageCRUD(t *testing.T) {
 		t.Fatal("原 code 查不到 —— code 被改掉了，会让未确认订单失去套餐引用")
 	}
 	// 也不能把另一个包的 code 抢过来
-	if _, err := store.PackageByCode(ctx, otherCode); err != nil {
+	if _, err := store.PackageByCode(ctx, tenantID, otherCode); err != nil {
 		t.Fatalf("回查第二个包: %v", err)
 	}
 	// 恢复成自己的 code，后续步骤继续用
 	pkg.Code = code
 
 	// ── SetPackageEnabled：下架后用户侧不可见，但后台仍可见 ──
-	ok, err := store.SetPackageEnabled(ctx, pkg.ID, false)
+	ok, err := store.SetPackageEnabled(ctx, tenantID, pkg.ID, false)
 	if err != nil {
 		t.Fatalf("SetPackageEnabled(false): %v", err)
 	}
@@ -141,7 +143,7 @@ func TestLiveAdminPackageCRUD(t *testing.T) {
 		t.Fatal("下架刚创建的套餐却说 id 不存在")
 	}
 
-	sold, err := store.ListPackages(ctx)
+	sold, err := store.ListPackages(ctx, tenantID)
 	if err != nil {
 		t.Fatalf("ListPackages: %v", err)
 	}
@@ -151,7 +153,7 @@ func TestLiveAdminPackageCRUD(t *testing.T) {
 		}
 	}
 
-	all, err := store.AdminListPackages(ctx)
+	all, err := store.AdminListPackages(ctx, tenantID)
 	if err != nil {
 		t.Fatalf("AdminListPackages: %v", err)
 	}
@@ -169,10 +171,10 @@ func TestLiveAdminPackageCRUD(t *testing.T) {
 	}
 
 	// 恢复上架后用户侧应重新可见
-	if ok, err := store.SetPackageEnabled(ctx, pkg.ID, true); err != nil || !ok {
+	if ok, err := store.SetPackageEnabled(ctx, tenantID, pkg.ID, true); err != nil || !ok {
 		t.Fatalf("SetPackageEnabled(true): ok=%v err=%v", ok, err)
 	}
-	sold, err = store.ListPackages(ctx)
+	sold, err = store.ListPackages(ctx, tenantID)
 	if err != nil {
 		t.Fatalf("ListPackages: %v", err)
 	}
@@ -191,10 +193,10 @@ func TestLiveAdminPackageCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("生成 UUID: %v", err)
 	}
-	if ok, err := store.SetPackageEnabled(ctx, missing, false); err != nil || ok {
+	if ok, err := store.SetPackageEnabled(ctx, tenantID, missing, false); err != nil || ok {
 		t.Errorf("不存在的 id 下架: ok=%v err=%v（期望 false, nil）", ok, err)
 	}
-	if found, err := store.UpdatePackage(ctx, &Package{ID: missing, Name: "x", DurationDays: 1, Enabled: true}); err != nil || found {
+	if found, err := store.UpdatePackage(ctx, tenantID, &Package{ID: missing, Name: "x", DurationDays: 1, Enabled: true}); err != nil || found {
 		t.Errorf("不存在的 id 更新: found=%v err=%v（期望 false, nil）", found, err)
 	}
 }

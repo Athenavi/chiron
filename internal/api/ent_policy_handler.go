@@ -79,11 +79,8 @@ func (h *EntPolicyHandler) RegisterRoutes(mux *http.ServeMux, authMW func(http.H
 	}
 	handle("GET /v1/ent/privacy", h.GetPrivacy)
 	handle("PUT /v1/ent/privacy", h.PutPrivacy)
-	handle("GET /v1/ent/model-policies", h.ListModelPolicies)
-	handle("POST /v1/ent/model-policies", h.CreateModelPolicy)
-	handle("GET /v1/ent/model-policies/{id}", h.GetModelPolicy)
-	handle("PUT /v1/ent/model-policies/{id}", h.UpdateModelPolicy)
-	handle("DELETE /v1/ent/model-policies/{id}", h.DeleteModelPolicy)
+	// 模型策略（ent_model_policies）管理面已随 /admin/models 下线：白名单与限速
+	// 直接影响请求路径，不再允许在后台改动。运行时读取（ent_quota_enforce）保留。
 }
 
 // entPolicyTenantID 取当前请求的租户 ID：claims 优先，缺省回退默认租户

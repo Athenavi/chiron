@@ -143,7 +143,7 @@ func WriteAuditLogs(ctx context.Context, entries []AuditEntry) error {
 
 	var sb strings.Builder
 	sb.WriteString(`INSERT INTO audit_logs
-		(id, tenant_id, user_id, action, resource_type, resource_id, details, ip_address) VALUES `)
+		(id, tenant_id, user_id, action, resource_type, resource_id, details, ip_address, created_at) VALUES `)
 	args := make([]any, 0, len(entries)*8)
 	idx := 0
 	next := func() string { idx++; return fmt.Sprintf("$%d", idx) }
@@ -175,7 +175,7 @@ func WriteAuditLogs(ctx context.Context, entries []AuditEntry) error {
 			sb.WriteString(", ")
 		}
 		sb.WriteString("(" + next() + ", " + next() + ", " + next() + ", " + next() + ", " +
-			next() + ", " + next() + ", " + next() + ", " + next() + ")")
+			next() + ", " + next() + ", " + next() + ", " + next() + ", NOW())")
 		args = append(args, generateUUID(), tenantID, userID, clipVarchar(e.Action, 64),
 			auditResourceType(e.Resource), clipVarchar(e.Resource, 64),
 			string(details), nilableIP(e.IP))

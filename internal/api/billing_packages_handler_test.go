@@ -104,7 +104,7 @@ func TestBuildPackageValidation(t *testing.T) {
 			if c.name == "缺 code 但更新模式下不校验" {
 				requireCode = false
 			}
-			pkg, problems, err := h.buildPackage(context.Background(), body, requireCode)
+			pkg, problems, err := h.buildPackage(context.Background(), 1, body, requireCode)
 			if err != nil {
 				t.Fatalf("buildPackage 返回基础设施错误: %v", err)
 			}
@@ -141,7 +141,7 @@ func TestBuildPackageNormalizesCurrency(t *testing.T) {
 
 	for input, want := range cases {
 		t.Run("currency="+input, func(t *testing.T) {
-			pkg, problems, err := h.buildPackage(context.Background(), billingPackageRequest{
+			pkg, problems, err := h.buildPackage(context.Background(), 1, billingPackageRequest{
 				Code:         "p1",
 				Name:         "P1",
 				Credits:      100,
@@ -168,7 +168,7 @@ func TestBuildPackageNormalizesCurrency(t *testing.T) {
 // 会写成 NULL 而撞非空约束 —— 这条把"不限制模型"固定在空数组语义上。
 func TestBuildPackageTrimsAndDefaults(t *testing.T) {
 	h := &BillingHandler{}
-	pkg, problems, err := h.buildPackage(context.Background(), billingPackageRequest{
+	pkg, problems, err := h.buildPackage(context.Background(), 1, billingPackageRequest{
 		Code:         "  starter  ",
 		Name:         "  Starter  ",
 		Credits:      100,

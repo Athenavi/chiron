@@ -512,19 +512,42 @@ func (h *SessionRuntimeHandler) metricsFromDB(ctx context.Context, sessionID str
 	}
 	row, err := db.GlobalDBManager.FetchOne(ctx, `
 		SELECT count(*)                                                  AS turns,
-		       COALESCE(SUM(input_tokens), 0)                            AS input_tokens,
-		       COALESCE(SUM(output_tokens), 0)                           AS output_tokens,
-		       COALESCE(SUM(cached_tokens), 0)                          AS cached_tokens,
-		       COALESCE(SUM(CASE WHEN cache_hit THEN 1 ELSE 0 END), 0)   AS cache_hits
+		       COALESCE(SUM(input_tokens), 0)::bigint                    AS input_tokens,
+		       COALESCE(SUM(output_tokens), 0)::bigint                   AS output_tokens,
+		       COALESCE(SUM(cached_tokens), 0)::bigint                   AS cached_tokens,
+		       COALESCE(SUM(CASE WHEN cache_hit THEN 1 ELSE 0 END), 0)::bigint AS cache_hits
 		  FROM turns WHERE session_id = $1`, sessionID)
 	if err != nil || row == nil {
 		return out
 	}
 	item, err := db.GlobalDBManager.FetchOne(ctx,
-		`SELECT COALESCE(SUM(cost_cents), 0) AS cost_cents FROM billing_records WHERE session_id = $1`, sessionID)
+		`SELECT COALESCE(SUM(cost_cents), 0)::bigint AS cost_cents FROM billing_records WHERE session_id = $1`, sessionID)
 	cost := 0
 	if err == nil && item != nil {
 		cost = intOf(item["cost_cents"])
+	}
+	// 最近一轮的上下文快照（turns.context）：状态栏的「上下文构成」在刷新后仍然
+	// 要有数据 —— 只靠 SSE 的 done 事件，切回历史会话就只剩"暂无数据"。
+	if ctxRow, cerr := db.GlobalDBManager.FetchOne(ctx,
+		`SELECT context FROM turns
+		  WHERE session_id = $1 AND context IS NOT NULL
+		  ORDER BY created_at DESC LIMIT 1`, sessionID); cerr == nil && ctxRow != nil {
+		switch v := ctxRow["context"].(type) {
+		case []byte:
+			var obj any
+			if json.Unmarshal(v, &obj) == nil {
+				out["context"] = obj
+			}
+		case string:
+			var obj any
+			if json.Unmarshal([]byte(v), &obj) == nil {
+				out["context"] = obj
+			}
+		default:
+			if v != nil {
+				out["context"] = v
+			}
+		}
 	}
 	totals := map[string]any{
 		"turns":         intOf(row["turns"]),
@@ -548,7 +571,7 @@ func (h *SessionRuntimeHandler) metricsFromDB(ctx context.Context, sessionID str
 	if rows, err := db.GlobalDBManager.FetchAll(ctx, `
 		SELECT id, input_tokens, output_tokens, cached_tokens, cache_hit, status, created_at,
 		       COALESCE(model, '') AS model,
-		       COALESCE(EXTRACT(EPOCH FROM (finished_at - started_at)) * 1000, 0) AS duration_ms
+		       COALESCE(EXTRACT(EPOCH FROM (finished_at - started_at)) * 1000, 0)::bigint AS duration_ms
 		  FROM turns WHERE session_id = $1 ORDER BY created_at DESC LIMIT 50`, sessionID); err == nil {
 		list := make([]map[string]any, 0, len(rows))
 		for _, r := range rows {

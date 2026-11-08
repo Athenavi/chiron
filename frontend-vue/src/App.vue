@@ -19,7 +19,17 @@ const antdLocale = computed(() => languageMeta(locale.value).antd)
 const themeStore = useThemeStore()
 // 实例化即应用持久化的排版偏好（store 内 immediate watch 写入 <html> 变量）
 useTypographyStore()
-const showLayout = computed(() => !['Login', 'Register'].includes(route.name as string))
+const showLayout = computed(() => {
+  const name = route.name as string
+  if (['Login', 'Register'].includes(name)) return false
+  // 管理后台自带完整的侧栏 / 顶栏 / 内容区（views/admin/Layout.vue）。再套一层
+  // AppLayout 会叠加两套浮动胶囊（左上品牌、右上通知/语言/主题/用户）与两个
+  // 100vh 滚动容器 —— 用户在后台右上角看到的按钮就是这么来的。
+  if (route.path === '/admin' || route.path.startsWith('/admin/')) return false
+  // 租户管理员后台同样自带完整布局（views/tenant/Layout.vue），不叠加全局胶囊。
+  if (route.path === '/tenant' || route.path.startsWith('/tenant/')) return false
+  return true
+})
 
 const themeConfig = computed(() => ({
   algorithm: themeStore.isDark ? theme.darkAlgorithm : theme.defaultAlgorithm,

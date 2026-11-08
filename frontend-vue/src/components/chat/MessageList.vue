@@ -394,6 +394,40 @@ function jumpToRow(rowIndex: number) {
   syncActiveQuestion()
 }
 
+// ── 提问导航条的宽度伸缩 ──────────────────────────────────────────
+//
+// 每个锚点是一条横向短条（默认 10px 宽、3px 高，按钮命中区 30×12）。
+// 鼠标在导航条上移动时，离指针越近的条越长、越远越短，当前提问再长一档 ——
+// 形成"音乐律动"式的随距离衰减；命中区也从原来的 8×8 放大到 30×12。
+const railEl = ref<HTMLElement | null>(null)
+const railWidths = ref<number[]>([])
+const RAIL_BASE = 10
+const RAIL_PEAK = 30
+const RAIL_FALLOFF = 90
+
+function computeRailWidths(clientY: number | null) {
+  const el = railEl.value
+  if (!el) return
+  const activeIdx = questions.value.findIndex(q => q.key === activeQuestionKey.value)
+  const btns = el.querySelectorAll<HTMLElement>('.rail-dot')
+  railWidths.value = Array.from(btns).map((btn, i) => {
+    const activeBoost = i === activeIdx ? 6 : 0
+    if (clientY === null) return RAIL_BASE + activeBoost
+    const rect = btn.getBoundingClientRect()
+    const dist = Math.abs(clientY - (rect.top + rect.height / 2))
+    const falloff = Math.max(0, 1 - dist / RAIL_FALLOFF)
+    return Math.round(RAIL_BASE + (RAIL_PEAK - RAIL_BASE) * falloff * falloff + activeBoost * 0.5)
+  })
+}
+
+function onRailMove(e: MouseEvent) {
+  computeRailWidths(e.clientY)
+}
+
+function onRailLeave() {
+  computeRailWidths(null)
+}
+
 // ── 选中文本操作菜单 ─────────────────────────────────────────
 // 菜单按内容坐标定位（含 scrollTop 补偿），滚动时关闭：跟着内容漂移的菜单没有意义。
 const selectionText = ref('')
@@ -692,11 +726,14 @@ const badgeText = computed(() => (unseenCount.value > 99 ? '99+' : String(unseen
       class="question-rail-host"
     >
       <nav
+        ref="railEl"
         class="question-rail"
         :aria-label="$t('common.question_navigation')"
+        @mousemove="onRailMove"
+        @mouseleave="onRailLeave"
       >
         <button
-          v-for="q in questions"
+          v-for="(q, i) in questions"
           :key="q.key"
           class="rail-dot"
           :class="{ active: q.key === activeQuestionKey }"
@@ -704,7 +741,12 @@ const badgeText = computed(() => (unseenCount.value > 99 ? '99+' : String(unseen
           :title="q.preview"
           :aria-label="$t('common.jump_to_question_preview', { preview: q.preview })"
           @click="jumpToRow(q.rowIndex)"
-        />
+        >
+          <span
+            class="rail-bar"
+            :style="{ width: `${railWidths[i] ?? RAIL_BASE}px` }"
+          />
+        </button>
       </nav>
     </div>
 
@@ -782,29 +824,44 @@ const badgeText = computed(() => (unseenCount.value > 99 ? '99+' : String(unseen
 .back-fade-enter-active, .back-fade-leave-active { transition: opacity var(--dur-normal), transform var(--dur-normal); }
 .back-fade-enter-from, .back-fade-leave-to { opacity: 0; transform: translateY(8px); }
 
-/* 提问导航条：零高度宿主 + sticky，浮在滚动容器中部而不占内容流空间 */
-.question-rail-host { position: sticky; bottom: 50%; height: 0; display: flex; justify-content: flex-end; pointer-events: none; z-index: var(--z-sticky); }
+/* 提问导航条：零高度 sticky 宿主（不占内容流）+ 导航条自身绝对定位向上展开。
+   ⚠ 导航条不能继续做 flex 子项：宿主 height: 0 会把带 max-height / overflow 的
+   导航条压成一条高，用户只能看到第一个锚点（实测）。绝对定位让它按内容高度展开，
+   bottom: 0 仍以宿主线为底边，所以视觉上还是"右侧垂直居中"。 */
+.question-rail-host { position: sticky; bottom: 50%; height: 0; pointer-events: none; z-index: var(--z-sticky); }
 .question-rail {
+  position: absolute;
+  bottom: 0;
+  inset-inline-end: 8px;
   pointer-events: auto;
-  display: flex; flex-direction: column; align-items: center; gap: 7px;
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  height: max-content;
   max-height: 46vh; overflow-y: auto;
-  margin-inline-end: 8px; padding: 8px 7px;
+  padding: 6px 5px;
   border: var(--hairline-width) solid var(--border-card); border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--bg-card) 88%, transparent);
   box-shadow: var(--sig-shadow-card);
   scrollbar-width: none;
 }
 .question-rail::-webkit-scrollbar { display: none; }
+/* 命中区 18×14，条本体只有 4px 宽：好看不牺牲可点击性 */
 .rail-dot {
-  flex: none; width: 8px; height: 8px; padding: 0;
-  border: none; border-radius: 50%;
-  background: var(--text-disabled);
+  flex: none;
+  display: flex; align-items: center; justify-content: flex-end;
+  width: 30px; height: 12px; padding: 0;
+  border: none; background: transparent;
   cursor: pointer;
-  transition: background var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
 }
-.rail-dot:hover { background: var(--text-secondary); transform: scale(1.35); }
-.rail-dot.active { background: var(--primary); transform: scale(1.35); }
-.rail-dot:focus-visible { outline: var(--focus-ring-width) solid var(--focus-ring-color); outline-offset: var(--focus-ring-offset); }
+.rail-bar {
+  display: block;
+  height: 3px; min-width: 6px;
+  border-radius: 999px;
+  background: var(--text-disabled);
+  transition: width var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+.rail-dot:hover .rail-bar { background: var(--text-secondary); }
+.rail-dot.active .rail-bar { background: var(--primary); }
+.rail-dot:focus-visible { outline: var(--focus-ring-width) solid var(--focus-ring-color); outline-offset: var(--focus-ring-offset); border-radius: var(--radius-full); }
 @media (max-width: 768px) { .question-rail { display: none; } }   /* 窄屏优先保证内容宽度 */
 
 /* 选中文本操作菜单：贴在选区上方（放不下则翻到下方） */

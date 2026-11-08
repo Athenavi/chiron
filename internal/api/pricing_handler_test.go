@@ -14,14 +14,14 @@ import (
 func TestPricingSortWhitelistCoversEveryAdvertisedKey(t *testing.T) {
 	// 白名单是 SQL 片段，绝不能来自请求参数。这里反过来锁住：前端/文档里宣传的
 	// 每个 sort 值都必须真的在表里，否则用户选了它只会拿到 400。
-	for _, key := range []string{"model", "input", "output", "mixed", "verified"} {
+	for _, key := range []string{"model", "input", "output", "mixed", "verified", "confidence"} {
 		if clause, ok := pricingSortClauses[key]; !ok || clause == "" {
 			t.Fatalf("sort=%q 缺少白名单映射（前端选项会直接 400）", key)
 		}
 	}
 	// 反向：白名单里不该有未被宣称的键，否则等于留了一个没人测的口子。
-	if len(pricingSortClauses) != 5 {
-		t.Fatalf("排序白名单应恰好 5 项，实际 %d 项", len(pricingSortClauses))
+	if len(pricingSortClauses) != 6 {
+		t.Fatalf("排序白名单应恰好 6 项，实际 %d 项", len(pricingSortClauses))
 	}
 }
 

@@ -198,13 +198,14 @@ export async function getStorage(): Promise<StorageConfig> {
   return data.data
 }
 
-export async function updateStorage(config: { backend: string; [key: string]: unknown }): Promise<void> {
-  await api.put('/v1/admin/storage', config)
+export async function updateStorage(config: { backend: string; [key: string]: unknown }): Promise<{ status?: string; warning?: string; previous?: string; current?: string }> {
+  const { data } = await api.put('/v1/admin/storage', config)
+  return data?.data ?? {}
 }
 
-export async function testStorage(): Promise<{ success: boolean; message: string }> {
-  const { data } = await api.post('/v1/admin/storage/test')
-  return data.data
+export async function testStorage(config?: { backend: string; [key: string]: unknown }): Promise<{ status?: string; message?: string }> {
+  const { data } = await api.post('/v1/admin/storage/test', config ?? {})
+  return data?.data ?? {}
 }
 
 // ── Redis ──
@@ -342,6 +343,19 @@ export async function savePaymentConfig(config: Record<string, unknown>): Promis
   return data?.data ?? { config: {}, channels: {}, callback_urls: {} }
 }
 
+// ── 租户级支付配置（/v1/tenant/payments）──
+// 每个租户一套渠道凭据；未单独配置时后端返回平台默认值（using_default=true）。
+
+export async function getTenantPaymentConfig(): Promise<PaymentConfigResponse> {
+  const { data } = await api.get('/v1/tenant/payments')
+  return data?.data ?? { config: {}, channels: {}, callback_urls: {} }
+}
+
+export async function saveTenantPaymentConfig(config: Record<string, unknown>): Promise<PaymentConfigResponse> {
+  const { data } = await api.put('/v1/tenant/payments', { config })
+  return data?.data ?? { config: {}, channels: {}, callback_urls: {} }
+}
+
 // ── D1：自诊断（"配了但不生效"的可自答清单）──────────────────────────────
 
 export type DiagnosticStatus = 'ok' | 'warn' | 'fail' | 'skipped'
@@ -398,8 +412,11 @@ export async function getUsageCatalog(params: {
   groupBy: 'day' | 'model' | 'user' | 'tenant'
   from?: string
   to?: string
+  /** admin = 平台后台（只允许租户级）；tenant = 租户后台（允许成员级） */
+  scope?: 'admin' | 'tenant'
 }): Promise<UsageCatalog> {
-  const { data } = await api.get('/v1/admin/usage/catalog', {
+  const path = params.scope === 'tenant' ? '/v1/tenant/usage/catalog' : '/v1/admin/usage/catalog'
+  const { data } = await api.get(path, {
     params: { group_by: params.groupBy, from: params.from, to: params.to },
   })
   return data?.data ?? {
@@ -476,6 +493,24 @@ export async function reviewInvoice(
   return data?.data ?? { id, status: payload.status }
 }
 
+// ── 租户级发票审核（/v1/tenant/invoices）──
+// 只看/只审本租户用户提交的申请；后端按 claims.tenant_id 过滤（越权一律 404）。
+
+export async function listTenantInvoices(status?: InvoiceStatus | 'all'): Promise<AdminInvoice[]> {
+  const { data } = await api.get('/v1/tenant/invoices', {
+    params: status ? { status } : undefined,
+  })
+  return data?.data?.invoices ?? []
+}
+
+export async function reviewTenantInvoice(
+  id: string,
+  payload: { status: 'approved' | 'rejected'; review_note?: string },
+): Promise<{ id: string; status: InvoiceStatus }> {
+  const { data } = await api.post(`/v1/tenant/invoices/${encodeURIComponent(id)}/review`, payload)
+  return data?.data ?? { id, status: payload.status }
+}
+
 // ── 套餐目录（管理端） ──
 
 /**
@@ -509,13 +544,13 @@ export interface AdminPackageInput {
 }
 
 export async function listAdminPackages(): Promise<AdminPackage[]> {
-  const { data } = await api.get('/v1/admin/billing/packages')
+  const { data } = await api.get('/v1/tenant/packages')
   return data?.data ?? []
 }
 
 /** 新建套餐。code 重复时后端返回 409。 */
 export async function createAdminPackage(payload: AdminPackageInput): Promise<AdminPackage | null> {
-  const { data } = await api.post('/v1/admin/billing/packages', payload)
+  const { data } = await api.post('/v1/tenant/packages', payload)
   return data?.data ?? null
 }
 
@@ -524,7 +559,7 @@ export async function updateAdminPackage(
   id: string,
   payload: AdminPackageInput,
 ): Promise<AdminPackage | null> {
-  const { data } = await api.put(`/v1/admin/billing/packages/${encodeURIComponent(id)}`, payload)
+  const { data } = await api.put(`/v1/tenant/packages/${encodeURIComponent(id)}`, payload)
   return data?.data ?? null
 }
 
@@ -533,10 +568,36 @@ export async function updateAdminPackage(
  * 已售权益是快照不受影响，但历史订单要靠 code 反查套餐名。
  */
 export async function disableAdminPackage(id: string): Promise<void> {
-  await api.delete(`/v1/admin/billing/packages/${encodeURIComponent(id)}`)
+  await api.delete(`/v1/tenant/packages/${encodeURIComponent(id)}`)
 }
 
 /** 重新上架套餐。 */
 export async function restoreAdminPackage(id: string): Promise<void> {
-  await api.post(`/v1/admin/billing/packages/${encodeURIComponent(id)}/restore`)
+  await api.post(`/v1/tenant/packages/${encodeURIComponent(id)}/restore`)
+}
+
+/** 平台内置套餐模板（只读）：租户新建套餐时可一键预填。 */
+export async function listPackageTemplates(): Promise<AdminPackage[]> {
+  const { data } = await api.get('/v1/tenant/package-templates')
+  return data?.data ?? []
+}
+
+// ── 租户身份能力通知（/v1/tenant/identity-notice）──
+
+export interface IdentityNotice {
+  enabled: boolean
+  providers: number
+  captcha: boolean
+  sms: boolean
+  fingerprint: string
+}
+
+/** 本租户是否启用了身份能力（SSO / 人机验证 / 短信）。失败返回 null（通知是增强信息）。 */
+export async function getIdentityNotice(): Promise<IdentityNotice | null> {
+  try {
+    const { data } = await api.get('/v1/tenant/identity-notice')
+    return data?.data ?? null
+  } catch {
+    return null
+  }
 }

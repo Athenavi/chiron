@@ -49,6 +49,7 @@ export default {
   document_management: "إدارة المستندات",
   document_content_preview: "معاينة محتوى المستند",
   document_uploaded_successfully: "تم رفع المستند بنجاح",
+  unsupported_file_type: "نوع ملف غير مدعوم. المسموح: {types}.",
   documents: "المستندات",
   document_preview: "معاينة المستند",
   my_knowledge_base: "قاعدة معرفتي",

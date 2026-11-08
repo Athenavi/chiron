@@ -142,11 +142,7 @@ func TestAdminDatastoreRoutesAreExposed(t *testing.T) {
 		{http.MethodDelete, "/v1/admin/domains/d1"},
 		{http.MethodPost, "/v1/admin/domains/d1/verify"},
 		{http.MethodPost, "/v1/admin/domains/d1/renew-ssl"},
-		{http.MethodGet, "/v1/admin/cron-jobs"},
-		{http.MethodPost, "/v1/admin/cron-jobs"},
-		{http.MethodPut, "/v1/admin/cron-jobs/c1"},
-		{http.MethodDelete, "/v1/admin/cron-jobs/c1"},
-		{http.MethodPost, "/v1/admin/cron-jobs/c1/trigger"},
+		// 定时任务管理面已随 /admin/cron 页面下线（调度器与 Webhook 入口仍在运行）
 		// 租户邀请码（F2）
 		{http.MethodGet, "/v1/admin/invites"},
 		{http.MethodPost, "/v1/admin/invites"},

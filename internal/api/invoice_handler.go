@@ -472,7 +472,129 @@ func (h *InvoiceHandler) AdminList(w http.ResponseWriter, r *http.Request) {
 	OK(w, map[string]interface{}{"invoices": out, "total": len(out)})
 }
 
-// Review 审核一张申请：pending → approved | rejected，**单向**。
+// TenantList GET /v1/tenant/invoices —— 本租户用户的发票申请（租户管理员审核用）。
+//
+// invoice_requests 没有 tenant_id：租户归属通过 user_id → users.tenant_id 关联。
+// 这样不会出现"申请落库后用户被迁移租户导致两张表口径不一致"的第二份事实。
+func (h *InvoiceHandler) TenantList(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil || claims.TenantID <= 0 {
+		Unauthorized(w, "missing tenant context")
+		return
+	}
+	status := strings.TrimSpace(r.URL.Query().Get("status"))
+	if status == "" {
+		status = invoiceStatusPending
+	}
+	statusFilter, err := normalizeInvoiceStatusFilter(status)
+	if err != nil {
+		BadRequest(w, err.Error())
+		return
+	}
+
+	sql := `SELECT ir.id, ir.payment_id, ir.title, ir.tax_no, ir.amount_cents,
+	               COALESCE(NULLIF(ir.currency, ''), 'CNY'), ir.status,
+	               COALESCE(ir.note, ''), COALESCE(ir.review_note, ''), ir.reviewed_at, ir.created_at
+	          FROM invoice_requests ir
+	          JOIN users u ON u.id = ir.user_id
+	         WHERE u.tenant_id = $1`
+	args := []interface{}{claims.TenantID}
+	if statusFilter != "" {
+		sql += ` AND ir.status = $2`
+		args = append(args, statusFilter)
+	}
+	sql += ` ORDER BY ir.created_at DESC NULLS LAST, ir.id DESC LIMIT 500`
+
+	rows, err := h.store.Query(r.Context(), sql, args...)
+	if err != nil {
+		logAndRespond(w, err, http.StatusInternalServerError, "list tenant invoices failed")
+		return
+	}
+	defer rows.Close()
+
+	out := make([]InvoiceRequest, 0, 16)
+	for rows.Next() {
+		var it InvoiceRequest
+		if err := rows.Scan(&it.ID, &it.PaymentID, &it.Title, &it.TaxNo, &it.AmountCents,
+			&it.Currency, &it.Status, &it.Note, &it.ReviewNote, &it.ReviewedAt, &it.CreatedAt); err != nil {
+			logAndRespond(w, err, http.StatusInternalServerError, "scan invoice failed")
+			return
+		}
+		out = append(out, it)
+	}
+	if err := rows.Err(); err != nil {
+		logAndRespond(w, err, http.StatusInternalServerError, "list tenant invoices failed")
+		return
+	}
+	OK(w, map[string]interface{}{"invoices": out, "total": len(out)})
+}
+
+// TenantReview POST /v1/tenant/invoices/{id}/review —— 只允许审核本租户的申请。
+//
+// 越权一律 404（与用户侧一致）：403 会确认"这张申请存在"，可被用来枚举。
+func (h *InvoiceHandler) TenantReview(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil || claims.TenantID <= 0 {
+		Unauthorized(w, "missing tenant context")
+		return
+	}
+	invoiceID := strings.TrimSpace(r.PathValue("id"))
+	if invoiceID == "" {
+		NotFound(w, ErrNotFound)
+		return
+	}
+	var body struct {
+		Status     string `json:"status"`
+		ReviewNote string `json:"review_note"`
+	}
+	if err := DecodeJSON(w, r, &body); err != nil {
+		BadRequest(w, ErrInvalidReq)
+		return
+	}
+	status, err := normalizeReviewStatus(body.Status)
+	if err != nil {
+		BadRequest(w, err.Error())
+		return
+	}
+	reviewNote := strings.TrimSpace(body.ReviewNote)
+	if len([]rune(reviewNote)) > invoiceNoteMaxLen {
+		BadRequest(w, fmt.Sprintf("review_note must be at most %d characters", invoiceNoteMaxLen))
+		return
+	}
+
+	tag, err := h.store.Exec(r.Context(),
+		`UPDATE invoice_requests ir
+		    SET status = $2, reviewed_by = $3, reviewed_at = now(), review_note = NULLIF($4, '')
+		  WHERE ir.id = $1 AND ir.status = 'pending'
+		    AND ir.user_id IN (SELECT id FROM users WHERE tenant_id = $5)`,
+		invoiceID, status, claims.UserID, reviewNote, claims.TenantID)
+	if err != nil {
+		logAndRespond(w, err, http.StatusInternalServerError, "review tenant invoice failed")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		var exists bool
+		if err := h.store.QueryRow(r.Context(),
+			`SELECT EXISTS(
+			    SELECT 1 FROM invoice_requests ir
+			     JOIN users u ON u.id = ir.user_id
+			    WHERE ir.id = $1 AND u.tenant_id = $2)`,
+			invoiceID, claims.TenantID).Scan(&exists); err != nil {
+			logAndRespond(w, err, http.StatusInternalServerError, "load invoice failed")
+			return
+		}
+		if !exists {
+			NotFound(w, "invoice request not found")
+			return
+		}
+		JSONWithCode(w, http.StatusConflict, CodeInvoiceAlreadyReviewed,
+			map[string]interface{}{"id": invoiceID},
+			"this invoice request has already been reviewed")
+		return
+	}
+	slog.Info("tenant invoice reviewed", "reviewer_id", claims.UserID, "tenant_id", claims.TenantID, "invoice_id", invoiceID, "status", status)
+	OK(w, map[string]interface{}{"id": invoiceID, "status": status})
+}
 //
 // 状态流转限制写在 UPDATE 的 WHERE 里（`AND status = 'pending'`）而不是先读后判：
 // 两个管理员同时点"通过"和"驳回"时，只有一个能生效，另一个影响 0 行并收到 409 ——

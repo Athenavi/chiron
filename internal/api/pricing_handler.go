@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -12,15 +13,23 @@ import (
 //
 // GET /v1/pricing/models?q=&provider=&sort=
 //
-// 数据来自 `model_prices`，由引擎侧 `app/pricing/sync.py` 定时拉取多个公开价格源并做
-// **交叉验证**后写入：只有 ≥2 个源在容差（相对差 5%）内一致的价格才会入库。
-// 因此这张表里出现一行，本身就意味着"这个数字有两个独立来源互相印证"。
+// 数据来自 `model_prices`，由引擎侧 `app/pricing/sync.py` 定时拉取多个公开价格源后写入。
+// 每行带 `verified`：是否**≥2 个源在容差（相对差 5%）内一致**。单源模型与源间有分歧的
+// 模型同样入库（`verified=false`），并保留每个源各自的报价（`source_details`）供页面展开 ——
+// 只显示"已印证"的模型会让目录只剩零星几条，用户看不到完整市场价。
 //
 // ⚠ **它不参与计费**：计费权威是 `BillingConfig`（管理员可改，`billing_records` 按它记账）。
 // 本端点只回答"公开市场价大概是多少"，供选型与成本估算参考。把两者混起来会让
 // "这个数字谁说了算"不可追溯 —— 而用户是照着账单付钱的。
 //
 // 只读、无写路径：价格由同步任务维护，任何人（含管理员）都不能通过 API 改它。
+
+// modelPriceSource 是某个价格源对同一个模型的报价（与 sync.py 的 source_details 对齐）。
+type modelPriceSource struct {
+	Source      string  `json:"source"`
+	InputPer1k  float64 `json:"input_per_1k"`
+	OutputPer1k float64 `json:"output_per_1k"`
+}
 
 // modelPriceRow 是一行参考价格。
 type modelPriceRow struct {
@@ -31,7 +40,11 @@ type modelPriceRow struct {
 	Currency    string   `json:"currency"`
 	Sources     []string `json:"sources"`
 	SourceCount int      `json:"source_count"`
-	VerifiedAt  string   `json:"verified_at"`
+	// Verified 表示该价格通过多源印证（≥2 源在容差内一致）。
+	Verified bool `json:"verified"`
+	// SourceDetails 是每个源各自的报价，供"印证来源"一栏展开查看。
+	SourceDetails []modelPriceSource `json:"source_details"`
+	VerifiedAt    string             `json:"verified_at"`
 	// MixedPer1k 是"混合成本"（输入:输出 = 3:1）—— 只作为同一量纲下的排序键，
 	// 不代表任何具体用量假设。用户看到的一直是 input/output 两列原文。
 	MixedPer1k float64 `json:"mixed_per_1k"`
@@ -44,6 +57,9 @@ var pricingSortClauses = map[string]string{
 	"output":   "output_per_1k ASC, model ASC",
 	"mixed":    "mixed_per_1k ASC, model ASC",
 	"verified": "verified_at DESC, model ASC",
+	// 默认排序：**多源已验证的排前面**，再按最近同步时间。
+	// 价格页首先要回答"这个数字可信吗"，把单源参考价混在同样位置没有意义。
+	"confidence": "verified DESC, verified_at DESC, model ASC",
 }
 
 const pricingDefaultLimit = 500
@@ -53,11 +69,13 @@ func (h *BillingHandler) ListModelPrices(w http.ResponseWriter, r *http.Request)
 	q := r.URL.Query()
 	sortKey := strings.ToLower(strings.TrimSpace(q.Get("sort")))
 	if sortKey == "" {
-		sortKey = "model"
+		// 默认"可信度优先"：已验证（≥2 源一致）的价格排在前面，
+		// 单源/分歧的参考价在后 —— 这是这张表最该先传达的信息。
+		sortKey = "confidence"
 	}
 	orderBy, ok := pricingSortClauses[sortKey]
 	if !ok {
-		BadRequest(w, "invalid sort: must be one of model, input, output, mixed, verified")
+		BadRequest(w, "invalid sort: must be one of model, input, output, mixed, verified, confidence")
 		return
 	}
 
@@ -79,6 +97,8 @@ func (h *BillingHandler) ListModelPrices(w http.ResponseWriter, r *http.Request)
 		       currency,
 		       sources,
 		       source_count,
+		       verified,
+		       source_details,
 		       verified_at
 		  FROM model_prices
 		 WHERE ($1 = '' OR provider = $1)
@@ -100,15 +120,24 @@ func (h *BillingHandler) ListModelPrices(w http.ResponseWriter, r *http.Request)
 		var (
 			row         modelPriceRow
 			srcRaw      string
+			detailsRaw  []byte
 			verifiedRaw any
 		)
 		if err := models.Scan(&row.Model, &row.Provider, &row.InputPer1k, &row.OutputPer1k,
-			&row.MixedPer1k, &row.Currency, &srcRaw, &row.SourceCount, &verifiedRaw); err != nil {
+			&row.MixedPer1k, &row.Currency, &srcRaw, &row.SourceCount, &row.Verified,
+			&detailsRaw, &verifiedRaw); err != nil {
 			slog.Warn("scan model price row failed", "error", err)
 			continue
 		}
 		// sources 是逗号分隔的源名（写入方 `sync.py` 的口径）。
 		row.Sources = splitNonEmpty(srcRaw, ",")
+		row.SourceDetails = make([]modelPriceSource, 0, len(row.Sources))
+		if len(detailsRaw) > 0 {
+			// 每源明细是同步任务写的 jsonb；解析失败不该让整行消失（页面仍能显示汇总）。
+			if err := json.Unmarshal(detailsRaw, &row.SourceDetails); err != nil {
+				slog.Warn("parse model price source_details failed", "model", row.Model, "error", err)
+			}
+		}
 		row.VerifiedAt = stringOf(verifiedRaw)
 		rows = append(rows, row)
 	}
@@ -123,9 +152,9 @@ func (h *BillingHandler) ListModelPrices(w http.ResponseWriter, r *http.Request)
 		"sort":          sortKey,
 		"limit":         pricingDefaultLimit,
 		"unit":          "USD per 1k tokens",
-		"verified_only": true,
-		"note": "价格经多源交叉验证（≥2 个公开价格源在 5% 容差内一致）后入库；" +
-			"仅供选型参考，不参与计费。",
+		"verified_only": false,
+		"note": "目录包含多源印证（verified=true，≥2 源在 5% 容差内一致）与单源参考价" +
+			"（verified=false）；展开「印证来源」可看每个源各自的报价。仅供选型参考，不参与计费。",
 	})
 }
 

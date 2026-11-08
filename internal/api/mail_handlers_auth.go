@@ -80,7 +80,7 @@ func (h *MailHandler) SendCode(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	row, err := h.loadConfig(ctx)
+	row, err := h.loadConfigForEmail(ctx, email)
 	if err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, ErrDBUnavailable)
 		return
@@ -177,7 +177,7 @@ func (h *MailHandler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	row, err := h.loadConfig(ctx)
+	row, err := h.loadConfigForEmail(ctx, email)
 	if err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, ErrDBUnavailable)
 		return

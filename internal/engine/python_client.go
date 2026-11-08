@@ -303,8 +303,17 @@ func (c *PythonClient) doWith(httpClient *http.Client, req *http.Request) (*http
 		if err == nil {
 			// 检查是否是可重试的错误状态码
 			if resp.StatusCode >= 500 || resp.StatusCode == 429 {
+				// 保留状态码与响应体：上层（上传 finalize、KB 代理）要据此把
+				// 503/429 的可操作文案透传给用户。只留一句 "server error 503"
+				// 会让调用方无法区分"知识库服务未配置"与真正的内部错误。
+				b, _ := io.ReadAll(resp.Body)
 				resp.Body.Close()
-				lastErr = fmt.Errorf("server error %d", resp.StatusCode)
+				lastErr = &HTTPError{
+					Method:     req.Method,
+					Path:       req.URL.Path,
+					StatusCode: resp.StatusCode,
+					Body:       b,
+				}
 				c.markFailure(addr)
 				continue
 			}
@@ -367,6 +376,18 @@ type PythonEvent struct {
 	// 任务线账（subagent_runs + run_lineage_ledger，由线账闸门约束），不进租户额度池。
 	// 接线前请看 internal/api/usage_accounting.go 的 withEvent 注释。
 	Usage map[string]any `json:"usage,omitempty"`
+
+	// ── done 事件附带的观测快照（原样透传，网关不解释其结构）──
+	//
+	// **必须在网关侧声明**：submit_handler 转发时是 `Data: evt`（本结构体），
+	// 未声明的字段在重新序列化那一刻就消失了。前端 `d.context` / `d.budget` /
+	// `d.cache` 此前一直读到 undefined —— 表现就是状态栏的「上下文构成」
+	// 永远显示"暂无数据"，即使引擎已经把分段算好了。
+	Context  json.RawMessage `json:"context,omitempty"`
+	Budget   json.RawMessage `json:"budget,omitempty"`
+	Cache    json.RawMessage `json:"cache,omitempty"`
+	TraceID  string          `json:"trace_id,omitempty"`
+	Metadata map[string]any  `json:"metadata,omitempty"`
 }
 
 // IsConnected checks if any Python engine instance is reachable.

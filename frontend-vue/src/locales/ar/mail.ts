@@ -20,4 +20,5 @@ export default {
   email_config: "إعداد البريد",
   email_config_saved: "تم حفظ إعداد البريد",
   smtp_server_address: "عنوان خادم SMTP",
+  using_platform_default: "لا يوجد SMTP خاص بهذا المستأجر بعد؛ يتم استخدام الإعداد الافتراضي للمنصة. الحفظ ينشئ إعدادًا مستقلًا للمستأجر.",
 }

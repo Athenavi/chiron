@@ -6,7 +6,7 @@ import {
 } from 'ant-design-vue'
 import {
   PlusOutlined, EditOutlined, DeleteOutlined, StopOutlined, PlayCircleOutlined,
-  BarChartOutlined, ReloadOutlined,
+  BarChartOutlined, ReloadOutlined, GlobalOutlined,
 } from '@ant-design/icons-vue'
 import { api } from '../../api'
 import { apiErrorMessage } from '../../composables/useCrudResource'
@@ -34,6 +34,74 @@ async function loadTenants() {
     message.error(apiErrorMessage(e, t('errors.failed_to_load_tenant_list')))
   } finally {
     loading.value = false
+  }
+}
+
+// ── 域名绑定（一对一：单租户单域名 / 单域名单租户）──
+// GET /v1/admin/domains（平台 owner 全量）→ 按 tenant_id 建映射；
+// 绑定 POST /v1/admin/domains { domain, tenant_id }；解绑 DELETE /v1/admin/domains/{id}。
+interface DomainEntry {
+  id: string
+  tenant_id: number
+  domain: string
+  verified?: boolean
+  ssl_status?: string
+}
+const domainsByTenant = ref<Record<string, DomainEntry>>({})
+
+async function loadDomains() {
+  try {
+    const resp = await api.get('/v1/admin/domains', { params: { per_page: 100 } })
+    const list: DomainEntry[] = resp.data?.data?.domains || []
+    const map: Record<string, DomainEntry> = {}
+    for (const d of list) map[String(d.tenant_id)] = d
+    domainsByTenant.value = map
+  } catch {
+    // 域名加载失败不影响租户列表本身
+  }
+}
+
+const domainModalOpen = ref(false)
+const domainSubmitting = ref(false)
+const domainTenant = ref<TenantEntry | null>(null)
+const domainInput = ref('')
+
+function openBindDomain(record: TenantEntry) {
+  domainTenant.value = record
+  domainInput.value = domainsByTenant.value[record.id]?.domain || ''
+  domainModalOpen.value = true
+}
+
+async function submitBindDomain() {
+  const record = domainTenant.value
+  if (!record) return
+  const value = domainInput.value.trim()
+  if (!value) {
+    message.warning(t('admin.domain_required'))
+    return
+  }
+  domainSubmitting.value = true
+  try {
+    await api.post('/v1/admin/domains', { domain: value, tenant_id: Number(record.id) })
+    message.success(t('admin.domain_bound'))
+    domainModalOpen.value = false
+    await loadDomains()
+  } catch (e) {
+    message.error(apiErrorMessage(e, t('errors.operation_failed')))
+  } finally {
+    domainSubmitting.value = false
+  }
+}
+
+async function unbindDomain(record: TenantEntry) {
+  const d = domainsByTenant.value[record.id]
+  if (!d) return
+  try {
+    await api.delete(`/v1/admin/domains/${d.id}`)
+    message.success(t('admin.domain_unbound'))
+    await loadDomains()
+  } catch (e) {
+    message.error(apiErrorMessage(e, t('errors.operation_failed')))
   }
 }
 
@@ -151,8 +219,9 @@ async function openUsage(record: TenantEntry) {
 const columns = [
   { title: t('common.name'), dataIndex: 'name', key: 'name', ellipsis: true },
   { title: t('common.status'), key: 'status', width: 110 },
+  { title: t('admin.bound_domain'), key: 'domain', width: 220 },
   { title: t('common.created_at'), key: 'created_at', width: 180 },
-  { title: t('common.action'), key: 'actions', width: 260, fixed: 'right' as const },
+  { title: t('common.action'), key: 'actions', width: 360, fixed: 'right' as const },
 ]
 
 // ── 工具函数 ──
@@ -173,7 +242,10 @@ function usageValue(key: string): number {
   return typeof v === 'number' ? v : 0
 }
 
-onMounted(loadTenants)
+onMounted(() => {
+  void loadTenants()
+  void loadDomains()
+})
 </script>
 
 <template>
@@ -226,6 +298,24 @@ onMounted(loadTenants)
               {{ formatDate(record.created_at) }}
             </template>
 
+            <template v-else-if="column.key === 'domain'">
+              <template v-if="domainsByTenant[record.id]">
+                <Tag color="blue">
+                  {{ domainsByTenant[record.id].domain }}
+                </Tag>
+                <Tag
+                  v-if="domainsByTenant[record.id].verified"
+                  color="green"
+                >
+                  {{ $t('pricing.verified') }}
+                </Tag>
+              </template>
+              <span
+                v-else
+                class="muted"
+              >{{ $t('admin.domain_not_bound') }}</span>
+            </template>
+
             <template v-else-if="column.key === 'actions'">
               <Space
                 :size="4"
@@ -240,6 +330,29 @@ onMounted(loadTenants)
                   </template>
                   {{ $t('common.usage') }}
                 </Button>
+                <Button
+                  size="small"
+                  @click="openBindDomain(record as TenantEntry)"
+                >
+                  <template #icon>
+                    <GlobalOutlined />
+                  </template>
+                  {{ domainsByTenant[record.id] ? $t('common.edit_2') : $t('admin.bind_domain') }}
+                </Button>
+                <Popconfirm
+                  v-if="domainsByTenant[record.id]"
+                  :title="$t('admin.unbind_domain')"
+                  :ok-text="$t('common.confirm')"
+                  :cancel-text="$t('common.cancel')"
+                  @confirm="unbindDomain(record as TenantEntry)"
+                >
+                  <Button
+                    size="small"
+                    danger
+                  >
+                    {{ $t('admin.unbind_domain') }}
+                  </Button>
+                </Popconfirm>
                 <Button
                   size="small"
                   @click="openEdit(record as TenantEntry)"
@@ -326,6 +439,32 @@ onMounted(loadTenants)
       </Form>
     </Modal>
 
+    <!-- 绑定域名（一对一：单租户单域名 / 单域名单租户） -->
+    <Modal
+      v-model:open="domainModalOpen"
+      :title="$t('admin.bind_domain')"
+      :ok-text="$t('common.save')"
+      :cancel-text="$t('common.cancel')"
+      :confirm-loading="domainSubmitting"
+      @ok="submitBindDomain"
+    >
+      <Form layout="vertical">
+        <Form.Item
+          :label="$t('admin.bound_domain')"
+          required
+        >
+          <Input
+            v-model:value="domainInput"
+            placeholder="app.example.com"
+            @press-enter="submitBindDomain"
+          />
+        </Form.Item>
+        <p class="domain-hint">
+          {{ $t('admin.domain_bound_hint') }}
+        </p>
+      </Form>
+    </Modal>
+
     <!-- 用量抽屉 -->
     <Drawer
       v-model:open="usageOpen"
@@ -361,6 +500,8 @@ onMounted(loadTenants)
 <style scoped>
 .tenant-management { padding: 24px; }
 .usage-empty { margin-top: 16px; }
+.muted { color: var(--text-tertiary); }
+.domain-hint { margin: 0; font-size: var(--fs-xs); color: var(--text-tertiary); }
 
 /* 窄屏:按钮全宽、触控目标 ≥ 40px */
 @media (max-width: 768px) {

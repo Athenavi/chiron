@@ -14,6 +14,8 @@ import (
 	"github.com/athenavi/chiron/internal/auth"
 	"github.com/athenavi/chiron/internal/db"
 	"github.com/athenavi/chiron/internal/id"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // ─────────────────────────────────────────────────────────────
@@ -58,15 +60,7 @@ func (h *AdminHandler) registerOpsRoutes(r *http.ServeMux) {
 	r.HandleFunc("PUT /models/{id}", h.UpdateModel)
 	r.HandleFunc("DELETE /models/{id}", h.DeleteModel)
 
-	// 定时任务（DB 持久化；执行由调度器接入）
-	r.HandleFunc("GET /cron-jobs", h.ListCronJobs)
-	r.HandleFunc("POST /cron-jobs", h.CreateCronJob)
-	r.HandleFunc("PUT /cron-jobs/{id}", h.UpdateCronJob)
-	r.HandleFunc("DELETE /cron-jobs/{id}", h.DeleteCronJob)
-	r.HandleFunc("POST /cron-jobs/{id}/trigger", h.HandleCronTrigger)
-	// 列表不再下发 webhook_token（长期凭据），重置是重新拿到它的唯一途径：
-	// 旧 token 立刻失效，新 token 只在本响应里出现一次。
-	r.HandleFunc("POST /cron-jobs/{id}/webhook-token", h.ResetCronWebhookToken)
+	// 定时任务管理面已下线（/admin/cron 页面移除）；调度器与 Webhook 触发保持运行。
 
 	// 租户邀请码（F2）：注册时据邀请码决定新用户归属哪个租户
 	r.HandleFunc("GET /invites", h.ListInvites)
@@ -283,8 +277,10 @@ func (h *AdminHandler) UpdateTenant(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	args = append(args, id)
+	// 不写 updated_at：tenants 表没有这一列（基线只有 id/name/created_at/status）。
+	// 之前的 `SET ..., updated_at = NOW()` 让「编辑租户」与「暂停」恒 500。
 	if _, err := db.GlobalDBManager.Exec(r.Context(),
-		fmt.Sprintf("UPDATE tenants SET %s, updated_at = NOW() WHERE id = $%d", strings.Join(sets, ", "), idx), args...); err != nil {
+		fmt.Sprintf("UPDATE tenants SET %s WHERE id = $%d", strings.Join(sets, ", "), idx), args...); err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, "update tenant failed")
 		return
 	}
@@ -299,13 +295,70 @@ func (h *AdminHandler) DeleteTenant(w http.ResponseWriter, r *http.Request) {
 		BadRequest(w, "cannot delete the default tenant")
 		return
 	}
-	res, err := db.GlobalDBManager.Exec(r.Context(), `DELETE FROM tenants WHERE id = $1`, id)
-	if err != nil {
-		logAndRespond(w, err, http.StatusInternalServerError, "delete tenant failed")
+	ctx := r.Context()
+	// 有用户就不许删：会话/消息/审计分散在十余张表，删租户必须是"清空之后"的显式动作，
+	// 不能让一次点击级联掉整租户的数据。
+	var users int
+	if err := db.GlobalDBManager.QueryRow(ctx,
+		`SELECT COUNT(*) FROM users WHERE tenant_id = $1`, id).Scan(&users); err != nil {
+		logAndRespond(w, err, http.StatusInternalServerError, "check tenant users failed")
 		return
 	}
-	if res.RowsAffected() == 0 {
+	if users > 0 {
+		BadRequest(w, fmt.Sprintf("tenant still has %d user(s); remove them first", users))
+		return
+	}
+	tx, err := db.GlobalDBManager.Begin(ctx)
+	if err != nil {
+		logAndRespond(w, err, http.StatusInternalServerError, "begin transaction failed")
+		return
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	// 租户级**配置**数据（角色/群组/域名/各类集成配置/配额池/上传与邀请）。
+	// 顺序按外键依赖：先删引用方，再删被引用方。之前直接 DELETE tenants 会撞
+	// ent_roles_tenant_id_fkey —— 新建的空租户都删不掉。
+	cleanup := []string{
+		`DELETE FROM ent_user_roles WHERE role_id IN (SELECT id FROM ent_roles WHERE tenant_id = $1)`,
+		`DELETE FROM ent_group_roles WHERE group_id IN (SELECT id FROM ent_groups WHERE tenant_id = $1)`,
+		`DELETE FROM ent_group_members WHERE group_id IN (SELECT id FROM ent_groups WHERE tenant_id = $1)`,
+		`DELETE FROM ent_groups WHERE tenant_id = $1`,
+		`DELETE FROM ent_roles WHERE tenant_id = $1`,
+		`DELETE FROM ent_quota_allocations WHERE pool_id IN (SELECT id FROM ent_quota_pools WHERE tenant_id = $1)`,
+		`DELETE FROM ent_quota_pools WHERE tenant_id = $1`,
+		`DELETE FROM tenant_members WHERE tenant_id = $1`,
+		`DELETE FROM tenant_invites WHERE tenant_id = $1`,
+		`DELETE FROM domains WHERE tenant_id = $1`,
+		`DELETE FROM ent_model_policies WHERE tenant_id = $1`,
+		`DELETE FROM ent_tenant_policies WHERE tenant_id = $1`,
+		`DELETE FROM ent_model_routes WHERE tenant_id = $1`,
+		`DELETE FROM ent_oidc_providers WHERE tenant_id = $1`,
+		`DELETE FROM ent_webhooks WHERE tenant_id = $1`,
+		`DELETE FROM ent_captcha_config WHERE tenant_id = $1`,
+		`DELETE FROM ent_mail_config WHERE tenant_id = $1`,
+		`DELETE FROM ent_sms_config WHERE tenant_id = $1`,
+		`DELETE FROM ent_catalog_installs WHERE tenant_id = $1`,
+		`DELETE FROM cron_jobs WHERE tenant_id = $1`,
+		`DELETE FROM uploads WHERE tenant_id = $1`,
+		`DELETE FROM user_knowledge_settings WHERE tenant_id = $1`,
+	}
+	for _, q := range cleanup {
+		if _, err := tx.Exec(ctx, q, id); err != nil {
+			logAndRespond(w, err, http.StatusInternalServerError, "cleanup tenant data failed")
+			return
+		}
+	}
+	tag, err := tx.Exec(ctx, `DELETE FROM tenants WHERE id = $1`, id)
+	if err != nil {
+		// 仍有外键引用（会话/知识库/审计…）⇒ 409：告诉调用方先清理，而不是 500。
+		logAndRespond(w, err, http.StatusConflict, "tenant still has dependent data; clean it up first")
+		return
+	}
+	if tag.RowsAffected() == 0 {
 		NotFound(w, "tenant not found")
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		logAndRespond(w, err, http.StatusInternalServerError, "commit transaction failed")
 		return
 	}
 	OK(w, map[string]string{"status": "deleted"})
@@ -320,7 +373,7 @@ func (h *AdminHandler) SuspendTenant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res, err := db.GlobalDBManager.Exec(r.Context(),
-		`UPDATE tenants SET status = 'suspended', updated_at = NOW() WHERE id = $1`, id)
+		`UPDATE tenants SET status = 'suspended' WHERE id = $1`, id)
 	if err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, "suspend tenant failed")
 		return
@@ -362,15 +415,39 @@ func (h *AdminHandler) TenantUsage(w http.ResponseWriter, r *http.Request) {
 // ── 域名管理 ──
 
 type domainRow struct {
-	ID        string `json:"id"`
-	Domain    string `json:"domain"`
-	SSLStatus string `json:"ssl_status"`
-	Verified  bool   `json:"verified"`
+	ID       string `json:"id"`
+	TenantID int16  `json:"tenant_id"`
+	// TenantName 便于平台直接在域名列表里看出归属；租户侧为空也可接受。
+	TenantName string `json:"tenant_name,omitempty"`
+	Domain     string `json:"domain"`
+	SSLStatus  string `json:"ssl_status"`
+	Verified   bool   `json:"verified"`
 	// 同 tenantRow：SQL NULL 不能让整行被跳过。
 	CreatedAt *time.Time `json:"created_at"`
 }
 
 var validDomainRe = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)+$`)
+
+// normalizeDomain 归一化用户输入：去协议 / 路径 / 端口 / 尾点，统一小写。
+// 域名比较必须忽略大小写与输入形态，否则 `https://Foo.com/` 与 `foo.com` 会被
+// 当成两个域名，唯一约束形同虚设。
+func normalizeDomain(raw string) string {
+	d := strings.TrimSpace(strings.ToLower(raw))
+	d = strings.TrimPrefix(d, "https://")
+	d = strings.TrimPrefix(d, "http://")
+	if i := strings.IndexAny(d, "/?#"); i >= 0 {
+		d = d[:i]
+	}
+	if host, _, ok := strings.Cut(d, ":"); ok {
+		d = host
+	}
+	return strings.TrimSuffix(d, ".")
+}
+
+// domainConflict 统一域名绑定冲突响应：前端据此展示具体原因。
+func domainConflict(w http.ResponseWriter, msg string) {
+	JSON(w, http.StatusConflict, APIResponse{Success: false, Code: "domain_conflict", Error: msg})
+}
 
 // ── 域名的租户级语句 ──
 //
@@ -387,8 +464,19 @@ var validDomainRe = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(
 // 下面六条语句因此统一带 `tenant_id = $n`，并把语句提为常量供单测断言形状。
 const (
 	domainCountQuery = `SELECT COUNT(*) FROM domains WHERE tenant_id = $1`
-	domainListQuery  = `SELECT id::text, COALESCE(domain, ''), COALESCE(ssl_status, 'none'), COALESCE(verified, false), created_at
-		   FROM domains WHERE tenant_id = $1 ORDER BY created_at DESC NULLS LAST, domain ASC LIMIT $2 OFFSET $3`
+	domainListQuery  = `SELECT d.id::text, d.tenant_id, COALESCE(t.name, ''), COALESCE(d.domain, ''), COALESCE(d.ssl_status, 'none'), COALESCE(d.verified, false), d.created_at
+		   FROM domains d LEFT JOIN tenants t ON t.id = d.tenant_id
+		  WHERE d.tenant_id = $1 ORDER BY d.created_at DESC NULLS LAST, d.domain ASC LIMIT $2 OFFSET $3`
+	// 平台 owner：可跨租户查看（可选 ?tenant_id= 收窄）。这两条不带租户谓词，
+	// 仅由 ListDomains 在 `isPlatformOwner` 为真时使用。
+	domainCountAllQuery = `SELECT COUNT(*) FROM domains`
+	domainListAllQuery  = `SELECT d.id::text, d.tenant_id, COALESCE(t.name, ''), COALESCE(d.domain, ''), COALESCE(d.ssl_status, 'none'), COALESCE(d.verified, false), d.created_at
+		   FROM domains d LEFT JOIN tenants t ON t.id = d.tenant_id
+		  ORDER BY d.created_at DESC NULLS LAST, d.domain ASC LIMIT $1 OFFSET $2`
+	domainCountAllByTenantQuery = `SELECT COUNT(*) FROM domains WHERE tenant_id = $1`
+	domainListAllByTenantQuery  = `SELECT d.id::text, d.tenant_id, COALESCE(t.name, ''), COALESCE(d.domain, ''), COALESCE(d.ssl_status, 'none'), COALESCE(d.verified, false), d.created_at
+		   FROM domains d LEFT JOIN tenants t ON t.id = d.tenant_id
+		  WHERE d.tenant_id = $1 ORDER BY d.created_at DESC NULLS LAST, d.domain ASC LIMIT $2 OFFSET $3`
 	// 改域名会重置 verified/ssl_status，因此必须限定归属，否则等于替别人下线入口。
 	domainUpdateQuery = `UPDATE domains SET domain = $1, verified = false, ssl_status = 'none', updated_at = NOW()
 		  WHERE id = $2 AND tenant_id = $3`
@@ -400,8 +488,10 @@ const (
 )
 
 func (h *AdminHandler) ListDomains(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	owner := isPlatformOwner(claims)
 	tenantID := GetTenantID(r)
-	if tenantID == 0 {
+	if !owner && tenantID == 0 {
 		Unauthorized(w, "missing tenant context")
 		return
 	}
@@ -422,13 +512,33 @@ func (h *AdminHandler) ListDomains(w http.ResponseWriter, r *http.Request) {
 	}
 	offset := (page - 1) * perPage
 
-	// 先查询总数（必须与被分页的查询同谓词，否则 total 是全平台的数量：
-	// 前端会显示"共 N 条"而列表只有自己租户的，翻页也翻不出内容）
-	var total int
-	_ = db.GlobalDBManager.QueryRow(r.Context(), domainCountQuery, tenantID).Scan(&total)
+	// 平台 owner 默认看全部（可用 ?tenant_id= 收窄）；租户 admin 只能看自己。
+	filterTenant := int16(0)
+	if owner {
+		if t := strings.TrimSpace(r.URL.Query().Get("tenant_id")); t != "" {
+			var v int
+			if _, err := fmt.Sscanf(t, "%d", &v); err == nil && v > 0 {
+				filterTenant = int16(v)
+			}
+		}
+	}
 
-	rows, err := db.GlobalDBManager.Query(r.Context(), domainListQuery,
-		tenantID, perPage, offset)
+	var (
+		total int
+		rows  pgx.Rows
+		err   error
+	)
+	switch {
+	case !owner:
+		_ = db.GlobalDBManager.QueryRow(r.Context(), domainCountQuery, tenantID).Scan(&total)
+		rows, err = db.GlobalDBManager.Query(r.Context(), domainListQuery, tenantID, perPage, offset)
+	case filterTenant > 0:
+		_ = db.GlobalDBManager.QueryRow(r.Context(), domainCountAllByTenantQuery, filterTenant).Scan(&total)
+		rows, err = db.GlobalDBManager.Query(r.Context(), domainListAllByTenantQuery, filterTenant, perPage, offset)
+	default:
+		_ = db.GlobalDBManager.QueryRow(r.Context(), domainCountAllQuery).Scan(&total)
+		rows, err = db.GlobalDBManager.Query(r.Context(), domainListAllQuery, perPage, offset)
+	}
 	if err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, "list domains failed")
 		return
@@ -437,7 +547,7 @@ func (h *AdminHandler) ListDomains(w http.ResponseWriter, r *http.Request) {
 	out := []domainRow{}
 	for rows.Next() {
 		var d domainRow
-		if err := rows.Scan(&d.ID, &d.Domain, &d.SSLStatus, &d.Verified, &d.CreatedAt); err == nil {
+		if err := rows.Scan(&d.ID, &d.TenantID, &d.TenantName, &d.Domain, &d.SSLStatus, &d.Verified, &d.CreatedAt); err == nil {
 			out = append(out, d)
 		}
 	}
@@ -452,47 +562,110 @@ func (h *AdminHandler) ListDomains(w http.ResponseWriter, r *http.Request) {
 func (h *AdminHandler) CreateDomain(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Domain string `json:"domain"`
+		// TenantID 仅平台 owner 可指定（为某个租户绑定）；租户 admin 传了也忽略。
+		TenantID int16 `json:"tenant_id"`
 	}
-	if err := DecodeJSON(w, r, &body); err != nil || !validDomainRe.MatchString(strings.ToLower(body.Domain)) {
+	if err := DecodeJSON(w, r, &body); err != nil {
+		BadRequest(w, ErrInvalidReq)
+		return
+	}
+	domain := normalizeDomain(body.Domain)
+	if domain == "" || !validDomainRe.MatchString(domain) {
 		BadRequest(w, "valid domain is required")
 		return
 	}
-	domain := strings.ToLower(strings.TrimSpace(body.Domain))
+	claims := auth.GetClaims(r.Context())
+	owner := isPlatformOwner(claims)
 	tenantID := GetTenantID(r)
+	if owner && body.TenantID > 0 {
+		tenantID = body.TenantID
+	}
 	if tenantID == 0 {
 		Unauthorized(w, "missing tenant context")
 		return
 	}
+
+	// 一对一约束：一个域名只属于一个租户，一个租户只有一个域名。
+	// 前置校验给出可读原因；唯一索引（迁移 0008）兜住并发窗口。
+	var boundTenant int16
+	if err := db.GlobalDBManager.QueryRow(r.Context(),
+		`SELECT tenant_id FROM domains
+		  WHERE lower(domain) = lower($1) AND domain IS NOT NULL AND domain <> '' LIMIT 1`,
+		domain).Scan(&boundTenant); err == nil {
+		if boundTenant == tenantID {
+			domainConflict(w, "该域名已绑定到本租户")
+		} else {
+			domainConflict(w, "该域名已被其他租户绑定")
+		}
+		return
+	}
+	var hasDomain bool
+	if err := db.GlobalDBManager.QueryRow(r.Context(),
+		`SELECT EXISTS(SELECT 1 FROM domains WHERE tenant_id = $1 AND domain IS NOT NULL AND domain <> '')`,
+		tenantID).Scan(&hasDomain); err == nil && hasDomain {
+		domainConflict(w, "每个租户只能绑定一个域名；请先解绑现有域名")
+		return
+	}
+
 	// id / 时间戳显式写入：基线表的这两列没有默认值（迁移 0003 才补上），
 	// 漏写会直接撞 `null value in column "id"` 的非空约束。
 	if _, err := db.GlobalDBManager.Exec(r.Context(),
 		`INSERT INTO domains (id, tenant_id, domain, ssl_status, verified, created_at, updated_at)
-		 VALUES ($1, $2, $3, 'none', false, NOW(), NOW())
-		 ON CONFLICT (domain) DO NOTHING`,
+		 VALUES ($1, $2, $3, 'none', false, NOW(), NOW())`,
 		newUUID(), tenantID, domain); err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			domainConflict(w, "域名或租户已有绑定，请刷新后重试")
+			return
+		}
 		logAndRespond(w, err, http.StatusInternalServerError, "create domain failed")
 		return
 	}
-	OK(w, map[string]interface{}{"domain": domain, "ssl_status": "none", "verified": false})
+	OK(w, map[string]interface{}{
+		"domain": domain, "tenant_id": tenantID, "ssl_status": "none", "verified": false,
+	})
 }
 
 func (h *AdminHandler) UpdateDomain(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	claims := auth.GetClaims(r.Context())
+	owner := isPlatformOwner(claims)
 	tenantID := GetTenantID(r)
-	if tenantID == 0 {
+	if !owner && tenantID == 0 {
 		Unauthorized(w, "missing tenant context")
 		return
 	}
 	var body struct {
 		Domain string `json:"domain"`
 	}
-	if err := DecodeJSON(w, r, &body); err != nil || !validDomainRe.MatchString(strings.ToLower(body.Domain)) {
+	if err := DecodeJSON(w, r, &body); err != nil {
+		BadRequest(w, ErrInvalidReq)
+		return
+	}
+	domain := normalizeDomain(body.Domain)
+	if domain == "" || !validDomainRe.MatchString(domain) {
 		BadRequest(w, "valid domain is required")
 		return
 	}
-	res, err := db.GlobalDBManager.Exec(r.Context(), domainUpdateQuery,
-		strings.ToLower(body.Domain), id, tenantID)
+
+	// 平台 owner 按 id 管理任意租户；租户 admin 必须带归属谓词。
+	var (
+		res pgconn.CommandTag
+		err error
+	)
+	if owner {
+		res, err = db.GlobalDBManager.Exec(r.Context(),
+			`UPDATE domains SET domain = $1, verified = false, ssl_status = 'none', updated_at = NOW() WHERE id = $2`,
+			domain, id)
+	} else {
+		res, err = db.GlobalDBManager.Exec(r.Context(), domainUpdateQuery, domain, id, tenantID)
+	}
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			domainConflict(w, "该域名已被其他租户绑定")
+			return
+		}
 		logAndRespond(w, err, http.StatusInternalServerError, "update domain failed")
 		return
 	}
@@ -506,14 +679,25 @@ func (h *AdminHandler) UpdateDomain(w http.ResponseWriter, r *http.Request) {
 
 func (h *AdminHandler) DeleteDomain(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	claims := auth.GetClaims(r.Context())
+	owner := isPlatformOwner(claims)
 	tenantID := GetTenantID(r)
-	if tenantID == 0 {
+	if !owner && tenantID == 0 {
 		Unauthorized(w, "missing tenant context")
 		return
 	}
 	// 归属谓词直接写在 DELETE 上：先 SELECT 再 DELETE 的两步写法在并发下仍可被
-	// 抢先改归属，而这里一次语句就完成了"是我的才删"。
-	res, err := db.GlobalDBManager.Exec(r.Context(), domainDeleteQuery, id, tenantID)
+	// 抢先改归属，而这里一次语句就完成了"是我的才删"。平台 owner 按 id 删任意租户。
+	var (
+		res pgconn.CommandTag
+		err error
+	)
+	if owner {
+		res, err = db.GlobalDBManager.Exec(r.Context(),
+			`DELETE FROM domains WHERE id = $1`, id)
+	} else {
+		res, err = db.GlobalDBManager.Exec(r.Context(), domainDeleteQuery, id, tenantID)
+	}
 	if err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, "delete domain failed")
 		return
@@ -918,241 +1102,3 @@ func ListUserModels(w http.ResponseWriter, r *http.Request) {
 	ListModelsForUser(w, r)
 }
 
-// ── 定时任务 ──
-//
-// 以下 SQL 提为包级常量：`tenant_id` 谓词是这几条语句的**全部**租户隔离，
-// 且单元测试跑不起真实 PG（仓库约定 DB 测试用 `*_live_test.go`），只能靠
-// 对语句文本的断言来防回归。见 admin_ops_cron_tenant_test.go。
-
-// cronListQuery 按租户列出定时任务。webhook_token 只用于派生末 4 位提示。
-const cronListQuery = `SELECT id::text, name, schedule, task, enabled, last_run_at, last_status, COALESCE(webhook_token,''), created_at
-		   FROM cron_jobs WHERE tenant_id = $1 ORDER BY created_at DESC`
-
-// cronInsertQuery 创建定时任务。
-//
-// `tenant_id` 是 NOT NULL（见 `0001_authoritative_baseline` 的 cron_jobs 建表），
-// 必须显式写入；此前漏了这一列，建任务接口在真实库上必然 500。
-const cronInsertQuery = `INSERT INTO cron_jobs (id, name, schedule, task, enabled, webhook_token, tenant_id, user_id)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`
-
-// cronUpdateTenantPredicate 是动态 UPDATE 的归属谓词模板（args 尾部是 job id、tenant id）。
-const cronUpdateTenantPredicate = " AND tenant_id = $%d"
-
-// cronDeleteQuery 删除/轮换/触发都按 (id, tenant) 定位。
-const cronDeleteQuery = `DELETE FROM cron_jobs WHERE id = $1 AND tenant_id = $2`
-
-// cronLoadQuery 读取单个 job 供执行（tenant 谓词防止跨租户触发）。
-const cronLoadQuery = `SELECT id::text, name, schedule, task, COALESCE(tenant_id::text,''), COALESCE(user_id::text,'')
-		 FROM cron_jobs WHERE id = $1 AND tenant_id = $2`
-
-// cronResetTokenQuery 轮换 webhook token（旧 token 立即失效）。
-const cronResetTokenQuery = `UPDATE cron_jobs SET webhook_token = $1, updated_at = NOW() WHERE id = $2 AND tenant_id = $3`
-
-// cronRow 是列表响应形状。
-//
-// `webhook_token` 刻意**不在列表里出现**：它是长期有效的触发凭据
-// （POST /v1/hooks/{id}?token=…），一旦随列表下发，就变成"任何能看管理页的人
-// 都能拿到生产凭据"——浏览器缓存、日志、前端 devtools、截图都会是泄漏点。
-// 完整 token 只在创建/重置的响应里出现一次；列表只给"是否已配置 + 末 4 位"。
-type cronRow struct {
-	ID          string     `json:"id"`
-	Name        string     `json:"name"`
-	Schedule    string     `json:"schedule"`
-	Task        string     `json:"task"`
-	Enabled     bool       `json:"enabled"`
-	LastRunAt   *time.Time `json:"last_run_at"`
-	LastStatus  string     `json:"last_status"`
-	WebhookSet  bool       `json:"webhook_enabled"`
-	WebhookHint string     `json:"webhook_token_hint"`
-	CreatedAt   time.Time  `json:"created_at"`
-}
-
-// webhookTokenHint 从完整 token 派生展示用提示（末 4 位），用于让用户辨认
-// "这条 URL 用的是哪把 token"，同时不足以重构凭据。
-func webhookTokenHint(token string) string {
-	if len(token) < 4 {
-		return ""
-	}
-	return "****" + token[len(token)-4:]
-}
-
-func (h *AdminHandler) ListCronJobs(w http.ResponseWriter, r *http.Request) {
-	tenantID := GetTenantID(r)
-	if tenantID == 0 {
-		Unauthorized(w, "missing tenant context")
-		return
-	}
-	pool := db.ReadPool()
-	if pool == nil {
-		ServiceUnavailable(w, "database not available")
-		return
-	}
-	// tenant_id 谓词是这条查询的**全部**隔离：缺了它，任何租户的 admin 都能列出
-	// 别人的 job。webhook_token 只用于派生末 4 位提示，不原样下发。
-	rows, err := pool.Query(r.Context(), cronListQuery, tenantID)
-	if err != nil {
-		logAndRespond(w, err, http.StatusInternalServerError, "list cron jobs failed")
-		return
-	}
-	defer rows.Close()
-	out := []cronRow{}
-	for rows.Next() {
-		var c cronRow
-		var token string
-		if rows.Scan(&c.ID, &c.Name, &c.Schedule, &c.Task, &c.Enabled, &c.LastRunAt, &c.LastStatus, &token, &c.CreatedAt) == nil {
-			c.WebhookSet = token != ""
-			c.WebhookHint = webhookTokenHint(token)
-			out = append(out, c)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		logAndRespond(w, err, http.StatusInternalServerError, "list cron jobs failed")
-		return
-	}
-	OK(w, map[string]interface{}{"jobs": out, "total": len(out)})
-}
-
-func (h *AdminHandler) CreateCronJob(w http.ResponseWriter, r *http.Request) {
-	tenantID := GetTenantID(r)
-	if tenantID == 0 {
-		Unauthorized(w, "missing tenant context")
-		return
-	}
-	var body struct {
-		Name     string `json:"name"`
-		Schedule string `json:"schedule"`
-		Task     string `json:"task"`
-		Enabled  bool   `json:"enabled"`
-	}
-	if err := DecodeJSON(w, r, &body); err != nil || body.Name == "" || body.Schedule == "" || body.Task == "" {
-		BadRequest(w, "name, schedule and task are required")
-		return
-	}
-	jobID, _ := id.UUID()
-	token, _ := id.UUID()
-	// tenant_id 必须显式写入：DDL 是 `tenant_id smallint NOT NULL`
-	// （见 `0001_authoritative_baseline` 的 cron_jobs 建表），此前 INSERT 漏了
-	// 这一列 ⇒ 建任务接口在真实库上必然 500；即便补了 DEFAULT 也会落到默认租户，
-	// 让 A 租户的 job 出现在 B 租户的列表里。
-	if _, err := db.GlobalDBManager.Exec(r.Context(), cronInsertQuery,
-		jobID, body.Name, body.Schedule, body.Task, body.Enabled, token, tenantID, claimsUserID(r)); err != nil {
-		logAndRespond(w, err, http.StatusInternalServerError, "create cron job failed")
-		return
-	}
-	// 完整 token 只在创建时返回一次（用户需要它拼 webhook URL），列表接口不再回传。
-	OK(w, map[string]interface{}{"id": jobID, "name": body.Name, "schedule": body.Schedule, "webhook_token": token})
-}
-
-func (h *AdminHandler) UpdateCronJob(w http.ResponseWriter, r *http.Request) {
-	jobID := r.PathValue("id")
-	tenantID := GetTenantID(r)
-	if tenantID == 0 {
-		Unauthorized(w, "missing tenant context")
-		return
-	}
-	var body struct {
-		Name     *string `json:"name"`
-		Schedule *string `json:"schedule"`
-		Task     *string `json:"task"`
-		Enabled  *bool   `json:"enabled"`
-	}
-	if err := DecodeJSON(w, r, &body); err != nil {
-		BadRequest(w, ErrInvalidReq)
-		return
-	}
-	// S 安全修复：列名白名单，防止 SQL 注入
-	cronColumnMap := map[string]string{
-		"name":     "name",
-		"schedule": "schedule",
-		"task":     "task",
-		"enabled":  "enabled",
-	}
-	sets, args := []string{}, []interface{}{}
-	idx := 1
-	apply := func(col string, v *string) {
-		if v != nil {
-			if _, ok := cronColumnMap[col]; !ok {
-				return
-			}
-			sets = append(sets, fmt.Sprintf("%s = $%d", col, idx))
-			args = append(args, *v)
-			idx++
-		}
-	}
-	apply("name", body.Name)
-	apply("schedule", body.Schedule)
-	apply("task", body.Task)
-	if body.Enabled != nil {
-		if _, ok := cronColumnMap["enabled"]; ok {
-			sets = append(sets, fmt.Sprintf("enabled = $%d", idx))
-			args = append(args, *body.Enabled)
-			idx++
-		}
-	}
-	if len(sets) == 0 {
-		BadRequest(w, "nothing to update")
-		return
-	}
-	args = append(args, jobID, tenantID)
-	// 归属谓词不能只在 UI 层：`WHERE id = $n` 意味着知道（或猜到）job id 的
-	// 任意租户 admin 都能改别人的定时任务，甚至把 task 换成自己的。
-	res, err := db.GlobalDBManager.Exec(r.Context(),
-		"UPDATE cron_jobs SET "+strings.Join(sets, ", ")+", updated_at = NOW() WHERE id = $"+fmt.Sprint(idx)+
-			fmt.Sprintf(cronUpdateTenantPredicate, idx+1), args...)
-	if err != nil {
-		logAndRespond(w, err, http.StatusInternalServerError, "update cron job failed")
-		return
-	}
-	// 0 行受影响既可能是"不存在"也可能是"不是你的"：统一 404，不泄漏别的租户是否存在。
-	if res.RowsAffected() == 0 {
-		NotFound(w, "cron job not found")
-		return
-	}
-	OK(w, map[string]string{"status": "updated"})
-}
-
-func (h *AdminHandler) DeleteCronJob(w http.ResponseWriter, r *http.Request) {
-	tenantID := GetTenantID(r)
-	if tenantID == 0 {
-		Unauthorized(w, "missing tenant context")
-		return
-	}
-	res, err := db.GlobalDBManager.Exec(r.Context(), cronDeleteQuery, r.PathValue("id"), tenantID)
-	if err != nil {
-		logAndRespond(w, err, http.StatusInternalServerError, "delete cron job failed")
-		return
-	}
-	if res.RowsAffected() == 0 {
-		NotFound(w, "cron job not found")
-		return
-	}
-	OK(w, map[string]string{"status": "deleted"})
-}
-
-// ResetCronWebhookToken 重新签发 webhook token（旧 token 立即失效）。
-//
-// 列表接口只回末 4 位提示，因此"把 URL 弄丢了"必须有一个可恢复的路径；
-// 同时这也让 token 泄漏后可以自行轮换，而不必删掉整个定时任务。
-func (h *AdminHandler) ResetCronWebhookToken(w http.ResponseWriter, r *http.Request) {
-	tenantID := GetTenantID(r)
-	if tenantID == 0 {
-		Unauthorized(w, "missing tenant context")
-		return
-	}
-	token, err := id.UUID()
-	if err != nil {
-		InternalError(w, "generate webhook token failed")
-		return
-	}
-	res, err := db.GlobalDBManager.Exec(r.Context(), cronResetTokenQuery,
-		token, r.PathValue("id"), tenantID)
-	if err != nil {
-		logAndRespond(w, err, http.StatusInternalServerError, "reset webhook token failed")
-		return
-	}
-	if res.RowsAffected() == 0 {
-		NotFound(w, "cron job not found")
-		return
-	}
-	OK(w, map[string]string{"webhook_token": token})
-}

@@ -10,7 +10,7 @@
  */
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Alert, Empty, Input, Select, Space, Table, Tag, Tooltip } from 'ant-design-vue'
+import { Alert, Collapse, CollapsePanel, Empty, Input, Popover, Select, Space, Table, Tag } from 'ant-design-vue'
 import { ReloadOutlined } from '@ant-design/icons-vue'
 import { listModelPrices, type ModelPrice } from '../api'
 
@@ -21,11 +21,13 @@ const rows = ref<ModelPrice[]>([])
 const providers = ref<string[]>([])
 const keyword = ref('')
 const provider = ref<string>('')
-const sort = ref('model')
+const sort = ref('confidence')
 const note = ref('')
 const unit = ref('')
 
 const sortOptions = computed(() => [
+  // 默认「可信度优先」：已验证（≥2 源一致）排在前面，单源参考价在后。
+  { value: 'confidence', label: t('pricing.sort_confidence') },
   { value: 'model', label: t('pricing.sort_model') },
   { value: 'input', label: t('pricing.sort_input') },
   { value: 'output', label: t('pricing.sort_output') },
@@ -38,9 +40,53 @@ const columns = computed(() => [
   { title: t('pricing.col_provider'), dataIndex: 'provider', key: 'provider', width: 140 },
   { title: t('pricing.col_input'), dataIndex: 'input_per_1k', key: 'input_per_1k', width: 130, align: 'right' as const },
   { title: t('pricing.col_output'), dataIndex: 'output_per_1k', key: 'output_per_1k', width: 130, align: 'right' as const },
-  { title: t('pricing.col_sources'), dataIndex: 'sources', key: 'sources', width: 240 },
+  // 可信度：verified=true 表示 ≥2 源在 5% 容差内一致；false 是单源/分歧参考价
+  { title: t('pricing.col_confidence'), dataIndex: 'verified', key: 'confidence', width: 110 },
+  { title: t('pricing.col_sources'), dataIndex: 'sources', key: 'sources', width: 260 },
   { title: t('pricing.col_verified'), dataIndex: 'verified_at', key: 'verified_at', width: 180 },
 ])
+
+interface ProviderGroup {
+  key: string
+  provider: string
+  models: ModelPrice[]
+  verifiedCount: number
+}
+
+// 按厂商分组：折叠面板的 key 用 provider（空值归入"其他"）。
+const grouped = computed<ProviderGroup[]>(() => {
+  const map = new Map<string, ModelPrice[]>()
+  for (const row of rows.value) {
+    const key = row.provider || '__unknown__'
+    const list = map.get(key)
+    if (list) list.push(row)
+    else map.set(key, [row])
+  }
+  return Array.from(map.entries())
+    .map(([key, models]) => ({
+      key,
+      provider: key === '__unknown__' ? t('pricing.provider_unknown') : key,
+      models,
+      verifiedCount: models.filter(m => m.verified).length,
+    }))
+    // 已验证多的组排前面（与默认「可信度优先」一致），同分按模型数、再按名称。
+    .sort((a, b) =>
+      (b.verifiedCount - a.verifiedCount)
+      || (b.models.length - a.models.length)
+      || a.provider.localeCompare(b.provider),
+    )
+})
+
+// 折叠态：默认展开第一个组；筛选后若原展开组已不在结果里，回落到第一个组。
+const activeKeys = ref<string[]>([])
+
+function syncActiveKeys() {
+  const keys = new Set(grouped.value.map(g => g.key))
+  const kept = activeKeys.value.filter(k => keys.has(k))
+  activeKeys.value = kept.length
+    ? kept
+    : (grouped.value.length ? [grouped.value[0].key] : [])
+}
 
 async function load() {
   loading.value = true
@@ -53,6 +99,7 @@ async function load() {
     rows.value = catalog.models
     note.value = catalog.note
     unit.value = catalog.unit
+    syncActiveKeys()
     // provider 选项只在无筛选时刷新：否则选中某个 provider 后列表收缩成一项，
     // 用户就再也切不回别的了。
     if (!provider.value && !keyword.value.trim()) {
@@ -117,35 +164,76 @@ onMounted(load)
       </template>
     </Alert>
 
-    <Table
-      :columns="columns"
-      :data-source="rows"
-      :loading="loading"
-      :pagination="{ pageSize: 20, showSizeChanger: true, showTotal: (n: number) => t('pricing.total', { n }) }"
-      :row-key="(r: ModelPrice) => `${r.model}|${r.provider}`"
-      size="small"
+    <Collapse
+      v-if="grouped.length"
+      v-model:active-key="activeKeys"
+      :destroy-inactive-panel="true"
+      class="pricing-groups"
     >
-      <template #bodyCell="{ column, record }">
-        <template v-if="column.key === 'input_per_1k'">{{ money(record.input_per_1k) }}</template>
-        <template v-else-if="column.key === 'output_per_1k'">{{ money(record.output_per_1k) }}</template>
-        <template v-else-if="column.key === 'sources'">
-          <Tooltip :title="record.sources.join(' + ')">
-            <Tag v-for="s in record.sources" :key="s" color="blue">{{ s }}</Tag>
-            <Tag v-if="record.source_count > 1" color="green">
-              {{ t('pricing.sources_agree', { n: record.source_count }) }}
-            </Tag>
-          </Tooltip>
+      <CollapsePanel
+        v-for="g in grouped"
+        :key="g.key"
+      >
+        <template #header>
+          <span class="group-head">
+            <span class="group-provider">{{ g.provider }}</span>
+            <Tag
+              v-if="g.verifiedCount"
+              color="green"
+            >{{ t('pricing.group_verified_n', { n: g.verifiedCount }) }}</Tag>
+            <span class="group-count">{{ t('pricing.group_models_n', { n: g.models.length }) }}</span>
+          </span>
         </template>
-        <template v-else-if="column.key === 'verified_at'">{{ when(record.verified_at) }}</template>
-        <template v-else-if="column.key === 'provider'">
-          <Tag v-if="record.provider">{{ record.provider }}</Tag>
-          <span v-else class="muted">-</span>
-        </template>
-      </template>
-      <template #emptyText>
-        <Empty :description="t('pricing.empty')" />
-      </template>
-    </Table>
+
+        <Table
+          :columns="columns"
+          :data-source="g.models"
+          :loading="loading"
+          :pagination="{ pageSize: 10, hideOnSinglePage: true }"
+          :row-key="(r: ModelPrice) => `${r.model}|${r.provider}`"
+          size="small"
+        >
+          <template #bodyCell="{ column, record }">
+            <template v-if="column.key === 'input_per_1k'">{{ money(record.input_per_1k) }}</template>
+            <template v-else-if="column.key === 'output_per_1k'">{{ money(record.output_per_1k) }}</template>
+            <template v-else-if="column.key === 'confidence'">
+              <Tag v-if="record.verified" color="green">{{ t('pricing.verified') }}</Tag>
+              <Tag v-else color="orange">{{ t('pricing.single_source') }}</Tag>
+            </template>
+            <template v-else-if="column.key === 'sources'">
+              <Popover trigger="click" placement="bottomLeft">
+                <template #content>
+                  <div class="source-details">
+                    <div class="source-detail-head">{{ t('pricing.source_details_hint') }}</div>
+                    <div v-for="d in record.source_details" :key="d.source" class="source-detail-row">
+                      <Tag color="blue">{{ d.source }}</Tag>
+                      <span class="source-detail-price">{{ money(d.input_per_1k) }} / {{ money(d.output_per_1k) }}</span>
+                    </div>
+                    <div v-if="!record.source_details?.length" class="source-detail-row muted">
+                      {{ t('pricing.source_details_missing') }}
+                    </div>
+                  </div>
+                </template>
+                <button type="button" class="sources-link">
+                  {{ record.sources.join(' + ') || '-' }}
+                </button>
+              </Popover>
+              <Tag v-if="record.verified" color="green">{{ t('pricing.sources_agree', { n: record.source_count }) }}</Tag>
+              <Tag v-else-if="record.source_count > 1" color="orange">{{ t('pricing.sources_differ', { n: record.source_count }) }}</Tag>
+            </template>
+            <template v-else-if="column.key === 'verified_at'">{{ when(record.verified_at) }}</template>
+            <template v-else-if="column.key === 'provider'">
+              <Tag v-if="record.provider">{{ record.provider }}</Tag>
+              <span v-else class="muted">-</span>
+            </template>
+          </template>
+        </Table>
+      </CollapsePanel>
+    </Collapse>
+    <Empty
+      v-else-if="!loading"
+      :description="t('pricing.empty')"
+    />
   </div>
 </template>
 
@@ -170,5 +258,41 @@ onMounted(load)
 }
 .muted {
   color: var(--text-tertiary);
+}
+.pricing-groups { background: transparent; border: none; }
+.pricing-groups :deep(.ant-collapse-item) { border-bottom: var(--hairline-width) solid var(--border); }
+.pricing-groups :deep(.ant-collapse-header) { padding: 10px 4px; align-items: center; }
+.pricing-groups :deep(.ant-collapse-content-box) { padding: 0 0 12px; }
+.group-head { display: inline-flex; align-items: center; gap: 8px; }
+.group-provider { font-weight: var(--fw-semibold); color: var(--text-primary); }
+.group-count { font-size: var(--fs-xs); color: var(--text-tertiary); }
+.sources-link {
+  padding: 0;
+  font: inherit;
+  font-size: var(--fs-xs);
+  color: var(--primary);
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-decoration: underline dotted;
+}
+.source-details {
+  max-width: 320px;
+}
+.source-detail-head {
+  margin-bottom: 6px;
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+}
+.source-detail-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+  font-size: var(--fs-xs);
+}
+.source-detail-price {
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
 }
 </style>

@@ -20,4 +20,5 @@ export default {
   email_config: "Email config",
   email_config_saved: "Email config saved",
   smtp_server_address: "SMTP server address",
+  using_platform_default: "This tenant has no SMTP of its own yet; the platform default is in use. Saving creates an independent tenant configuration.",
 }

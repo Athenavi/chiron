@@ -49,6 +49,7 @@ export default {
   document_management: "Document management",
   document_content_preview: "Document content preview",
   document_uploaded_successfully: "Document uploaded successfully",
+  unsupported_file_type: "Unsupported file type. Allowed: {types}.",
   documents: "Documents",
   document_preview: "Document preview",
   my_knowledge_base: "My knowledge base",

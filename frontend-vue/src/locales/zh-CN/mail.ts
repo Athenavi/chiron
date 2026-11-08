@@ -20,4 +20,5 @@ export default {
   email_config: "邮件配置",
   email_config_saved: "邮件配置已保存",
   smtp_server_address: "SMTP 服务器地址",
+  using_platform_default: "本租户尚未单独配置 SMTP，当前使用平台默认配置；保存后本租户将拥有独立配置。",
 }

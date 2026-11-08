@@ -33,6 +33,7 @@ type Entitlement struct {
 // Package 是后台可配置的套餐目录项，对应 billing_packages 表。
 type Package struct {
 	ID            string   `json:"id"`
+	TenantID      int      `json:"tenant_id"`
 	Code          string   `json:"code"`
 	Name          string   `json:"name"`
 	Credits       int      `json:"credits"`
@@ -46,8 +47,9 @@ type Package struct {
 
 // EntitlementStore 是套餐目录与用户权益的持久化接口。
 type EntitlementStore interface {
-	// PackageByCode 读套餐目录；不存在返回 (nil, nil)。
-	PackageByCode(ctx context.Context, code string) (*Package, error)
+	// PackageByCode 读套餐目录；租户自己的套餐优先，未命中回退平台默认目录。
+	// 不存在返回 (nil, nil)。
+	PackageByCode(ctx context.Context, tenantID int, code string) (*Package, error)
 	// GrantEntitlement 发放一条权益，幂等（payment_id 唯一）。
 	// 返回 granted=false 表示该支付单此前已发放过。
 	GrantEntitlement(ctx context.Context, e *Entitlement) (bool, error)
@@ -56,28 +58,28 @@ type EntitlementStore interface {
 	// ExpiringEntitlements 返回在 (now, now+withinDays] 内到期、且当前仍有效的权益。
 	// 供到期预警扫描使用（P2-3）：**跨全部用户**，不做 user 过滤。
 	ExpiringEntitlements(ctx context.Context, now time.Time, withinDays int) ([]Entitlement, error)
-	// ListPackages 返回后台已上架的套餐目录（按 sort_order 排序）。
-	ListPackages(ctx context.Context) ([]Package, error)
+	// ListPackages 返回某租户可见的已上架套餐（本租户 + 平台默认），按 sort_order 排序。
+	ListPackages(ctx context.Context, tenantID int) ([]Package, error)
 	// UserEntitlements 返回用户的全部权益（**含已过期**），供"我的套餐"页展示到期状态。
 	// 只返回生效中的会让"已过期"和"从未购买"在界面上无法区分。
 	UserEntitlements(ctx context.Context, userID string) ([]Entitlement, error)
 
 	// ── 管理端（P2-2c）──
 
-	// AdminListPackages 返回**全部**套餐（含已下架），供后台管理页使用。
+	// AdminListPackages 返回**本租户**的全部套餐（含已下架），供租户后台使用。
 	// 与 ListPackages 刻意分开：后者是用户侧视图（enabled=true 才有意义），
 	// 后台必须看得到下架项，否则"下架后它还在列表里吗"无从确认。
-	AdminListPackages(ctx context.Context) ([]Package, error)
-	// CreatePackage 新建套餐。code 重复返回 ErrPackageCodeExists。
+	AdminListPackages(ctx context.Context, tenantID int) ([]Package, error)
+	// CreatePackage 新建套餐。同一租户内 code 重复返回 ErrPackageCodeExists。
 	CreatePackage(ctx context.Context, p *Package) error
-	// UpdatePackage 按 id 更新可编辑字段；返回 false 表示该 id 不存在。
+	// UpdatePackage 按 (id, tenant_id) 更新可编辑字段；返回 false 表示不存在或不属于该租户。
 	//
 	// **code 不在可编辑字段内**：它是 `payments.package_code` 的引用值，改了会让
 	// 未确认的订单在 `PackageByCode` 里查不到套餐 —— 于是钱付了、权益发不出来。
-	UpdatePackage(ctx context.Context, p *Package) (bool, error)
-	// SetPackageEnabled 上架/下架；返回 false 表示该 id 不存在。
+	UpdatePackage(ctx context.Context, tenantID int, p *Package) (bool, error)
+	// SetPackageEnabled 上架/下架（按 id + tenant_id）；返回 false 表示不存在或不属于该租户。
 	// 下架而非删除：已售权益是快照不受影响，但历史订单要靠 code 反查套餐名。
-	SetPackageEnabled(ctx context.Context, id string, enabled bool) (bool, error)
+	SetPackageEnabled(ctx context.Context, tenantID int, id string, enabled bool) (bool, error)
 }
 
 // isUniqueViolation 判定 SQLSTATE 23505。
@@ -90,21 +92,32 @@ func isUniqueViolation(err error) bool {
 }
 
 // PackageByCode 读套餐目录（主库，避免副本延迟让刚上架的套餐买不到）。
-func (s *PGStore) PackageByCode(ctx context.Context, code string) (*Package, error) {
-	var p Package
-	err := db.GlobalDBManager.QueryRow(ctx,
-		`SELECT id, code, name, credits, price_cents, currency, duration_days,
-		        COALESCE(allowed_models, ARRAY[]::text[]), enabled, sort_order
-		   FROM billing_packages WHERE code = $1`, code).
-		Scan(&p.ID, &p.Code, &p.Name, &p.Credits, &p.PriceCents, &p.Currency,
-			&p.DurationDays, &p.AllowedModels, &p.Enabled, &p.SortOrder)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, nil
+//
+// 租户自己的套餐优先；未命中回退平台默认目录（tenant_id=0），这样历史平台套餐
+// 仍可购买，租户新增同 code 的套餐则覆盖平台默认。
+func (s *PGStore) PackageByCode(ctx context.Context, tenantID int, code string) (*Package, error) {
+	load := func(id int) (*Package, error) {
+		var p Package
+		err := db.GlobalDBManager.QueryRow(ctx,
+			`SELECT id, tenant_id, code, name, credits, price_cents, currency, duration_days,
+			        COALESCE(allowed_models, ARRAY[]::text[]), enabled, sort_order
+			   FROM billing_packages WHERE tenant_id = $1 AND code = $2`, id, code).
+			Scan(&p.ID, &p.TenantID, &p.Code, &p.Name, &p.Credits, &p.PriceCents, &p.Currency,
+				&p.DurationDays, &p.AllowedModels, &p.Enabled, &p.SortOrder)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("query package: %w", err)
 		}
-		return nil, fmt.Errorf("query package: %w", err)
+		return &p, nil
 	}
-	return &p, nil
+	if tenantID > 0 {
+		if p, err := load(tenantID); err != nil || p != nil {
+			return p, err
+		}
+	}
+	return load(0)
 }
 
 // GrantEntitlement 发放权益。
@@ -206,13 +219,12 @@ func (s *PGStore) ExpiringEntitlements(ctx context.Context, now time.Time, withi
 
 // ListPackages 返回已上架套餐，按 sort_order 升序（sort_order 相同再按价格）。
 // 只返回 enabled = TRUE：下架套餐不应出现在用户可购买列表里。
-func (s *PGStore) ListPackages(ctx context.Context) ([]Package, error) {
+func (s *PGStore) ListPackages(ctx context.Context, tenantID int) ([]Package, error) {
 	rows, err := db.GlobalDBManager.Query(ctx,
-		`SELECT id, code, name, credits, price_cents, currency, duration_days,
-		        COALESCE(allowed_models, ARRAY[]::text[]), enabled, sort_order
+		`SELECT `+packageColumns+`
 		   FROM billing_packages
-		  WHERE enabled = TRUE
-		  ORDER BY sort_order ASC, price_cents ASC, code ASC`)
+		  WHERE enabled = TRUE AND tenant_id IN ($1, 0)
+		  ORDER BY sort_order ASC, price_cents ASC, code ASC`, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("list packages: %w", err)
 	}
@@ -220,12 +232,11 @@ func (s *PGStore) ListPackages(ctx context.Context) ([]Package, error) {
 
 	out := []Package{}
 	for rows.Next() {
-		var p Package
-		if err := rows.Scan(&p.ID, &p.Code, &p.Name, &p.Credits, &p.PriceCents, &p.Currency,
-			&p.DurationDays, &p.AllowedModels, &p.Enabled, &p.SortOrder); err != nil {
+		p, err := scanPackageRow(rows)
+		if err != nil {
 			return nil, fmt.Errorf("scan package: %w", err)
 		}
-		out = append(out, p)
+		out = append(out, *p)
 	}
 	return out, rows.Err()
 }
@@ -276,7 +287,11 @@ func (m *Manager) grantEntitlementForPayment(ctx context.Context, p *Payment) *E
 	if p == nil || p.PackageCode == "" {
 		return nil
 	}
-	pkg, err := m.store.PackageByCode(ctx, p.PackageCode)
+	// 套餐已按租户隔离：按订单用户反查租户，确保发放的是该租户定价的那一份。
+	tenantID := 0
+	_ = db.GlobalDBManager.QueryRow(ctx,
+		`SELECT COALESCE(tenant_id, 0) FROM users WHERE id = $1`, p.UserID).Scan(&tenantID)
+	pkg, err := m.store.PackageByCode(ctx, tenantID, p.PackageCode)
 	if err != nil {
 		slog.Error("load package for entitlement failed; credits credited but entitlement missing",
 			"order", p.ID, "user", p.UserID, "package", p.PackageCode, "error", err)
@@ -344,12 +359,12 @@ func (m *Manager) grantEntitlementForPayment(ctx context.Context, p *Payment) *E
 var ErrPackageCodeExists = errors.New("package code already exists")
 
 // 套餐目录的统一列清单，避免四个查询各写一份导致扫描错位。
-const packageColumns = `id, code, name, credits, price_cents, currency, duration_days,
+const packageColumns = `id, tenant_id, code, name, credits, price_cents, currency, duration_days,
 	        COALESCE(allowed_models, ARRAY[]::text[]), enabled, sort_order`
 
 func scanPackageRow(row interface{ Scan(...any) error }) (*Package, error) {
 	var p Package
-	if err := row.Scan(&p.ID, &p.Code, &p.Name, &p.Credits, &p.PriceCents, &p.Currency,
+	if err := row.Scan(&p.ID, &p.TenantID, &p.Code, &p.Name, &p.Credits, &p.PriceCents, &p.Currency,
 		&p.DurationDays, &p.AllowedModels, &p.Enabled, &p.SortOrder); err != nil {
 		return nil, err
 	}
@@ -360,11 +375,12 @@ func scanPackageRow(row interface{ Scan(...any) error }) (*Package, error) {
 //
 // 排序把启用项排在前面：运营打开页面最常做的是"改还在卖的"，下架项通常只是
 // 留着看历史，压在列表底部更顺手。
-func (s *PGStore) AdminListPackages(ctx context.Context) ([]Package, error) {
+func (s *PGStore) AdminListPackages(ctx context.Context, tenantID int) ([]Package, error) {
 	rows, err := db.GlobalDBManager.Query(ctx,
 		`SELECT `+packageColumns+`
 		   FROM billing_packages
-		  ORDER BY enabled DESC, sort_order ASC, price_cents ASC, code ASC`)
+		  WHERE tenant_id = $1
+		  ORDER BY enabled DESC, sort_order ASC, price_cents ASC, code ASC`, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("admin list packages: %w", err)
 	}
@@ -401,10 +417,10 @@ func (s *PGStore) CreatePackage(ctx context.Context, p *Package) error {
 	}
 	_, err = db.GlobalDBManager.Exec(ctx,
 		`INSERT INTO billing_packages
-		     (id, code, name, credits, price_cents, currency, duration_days,
+		     (id, tenant_id, code, name, credits, price_cents, currency, duration_days,
 		      allowed_models, enabled, sort_order, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())`,
-		p.ID, p.Code, p.Name, p.Credits, p.PriceCents, p.Currency, p.DurationDays,
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())`,
+		p.ID, p.TenantID, p.Code, p.Name, p.Credits, p.PriceCents, p.Currency, p.DurationDays,
 		models, p.Enabled, p.SortOrder)
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -419,7 +435,7 @@ func (s *PGStore) CreatePackage(ctx context.Context, p *Package) error {
 //
 // **刻意不更新 code**：`payments.package_code` 存的就是它，改掉会让还没确认的
 // 订单在 `PackageByCode` 里查不到套餐 —— 钱付了、权益发不出来。code 只能新建。
-func (s *PGStore) UpdatePackage(ctx context.Context, p *Package) (bool, error) {
+func (s *PGStore) UpdatePackage(ctx context.Context, tenantID int, p *Package) (bool, error) {
 	if p == nil {
 		return false, errors.New("nil package")
 	}
@@ -432,9 +448,9 @@ func (s *PGStore) UpdatePackage(ctx context.Context, p *Package) (bool, error) {
 		    SET name = $2, credits = $3, price_cents = $4, currency = $5,
 		        duration_days = $6, allowed_models = $7, sort_order = $8,
 		        updated_at = NOW()
-		  WHERE id = $1`,
+		  WHERE id = $1 AND tenant_id = $9`,
 		p.ID, p.Name, p.Credits, p.PriceCents, p.Currency, p.DurationDays,
-		models, p.SortOrder)
+		models, p.SortOrder, tenantID)
 	if err != nil {
 		return false, fmt.Errorf("update package: %w", err)
 	}
@@ -445,10 +461,10 @@ func (s *PGStore) UpdatePackage(ctx context.Context, p *Package) (bool, error) {
 //
 // 下架而不是删除：已售权益是快照、不受影响，但历史订单要靠 code 反查套餐名，
 // 物理删除会让"我当初买的到底是什么"永久失联。
-func (s *PGStore) SetPackageEnabled(ctx context.Context, id string, enabled bool) (bool, error) {
+func (s *PGStore) SetPackageEnabled(ctx context.Context, tenantID int, id string, enabled bool) (bool, error) {
 	tag, err := db.GlobalDBManager.Exec(ctx,
-		`UPDATE billing_packages SET enabled = $2, updated_at = NOW() WHERE id = $1`,
-		id, enabled)
+		`UPDATE billing_packages SET enabled = $2, updated_at = NOW() WHERE id = $1 AND tenant_id = $3`,
+		id, enabled, tenantID)
 	if err != nil {
 		return false, fmt.Errorf("set package enabled: %w", err)
 	}

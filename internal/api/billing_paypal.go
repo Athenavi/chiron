@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/athenavi/chiron/internal/auth"
 	"github.com/athenavi/chiron/internal/billing"
 	"github.com/athenavi/chiron/internal/db"
 )
@@ -29,13 +30,19 @@ import (
 
 // createPayPalPayment 创建 PayPal 订单并落库 payments，返回 checkout_url。
 func (h *BillingHandler) createPayPalPayment(w http.ResponseWriter, r *http.Request, userID string, credits int, p *billing.Payment) {
-	if pcfg := h.paymentConfig(); pcfg.PayPalClientID == "" || pcfg.PayPalSecret == "" {
+	// 与支付宝/微信一致：按租户配置构造 PayPal 客户端（未配置回退全局）。
+	tenantID := 0
+	if claims := auth.GetClaims(r.Context()); claims != nil {
+		tenantID = int(claims.TenantID)
+	}
+	pcfg := h.paymentConfigForTenant(r.Context(), tenantID)
+	if pcfg.PayPalClientID == "" || pcfg.PayPalSecret == "" {
 		JSON(w, http.StatusNotImplemented, APIResponse{Success: false, Error: "PayPal not configured"})
 		return
 	}
 
 	amount := fmt.Sprintf("%.2f", float64(credits)/100)
-	orderID, approvalURL, err := h.payPalCreateOrder(r.Context(), credits, amount, userID)
+	orderID, approvalURL, err := h.payPalCreateOrder(r.Context(), pcfg, credits, amount, userID)
 	if err != nil {
 		slog.Error("paypal order failed", "error", err)
 		if mErr := h.mgr.MarkPaymentFailed(r.Context(), p.ID); mErr != nil {
@@ -75,7 +82,14 @@ func (h *BillingHandler) PayPalCapture(w http.ResponseWriter, r *http.Request) {
 		BadRequest(w, "order_id required")
 		return
 	}
-	if result, err := h.payPalCaptureOrder(r.Context(), body.OrderID); err != nil {
+	// 按订单所属租户（当前登录用户的租户）取 PayPal 凭据：租户可能用自己的
+	// 商户应用，全局凭据无法 capture 它创建的订单。
+	tenantID := 0
+	if claims := auth.GetClaims(r.Context()); claims != nil {
+		tenantID = int(claims.TenantID)
+	}
+	pcfg := h.paymentConfigForTenant(r.Context(), tenantID)
+	if result, err := h.payPalCaptureOrder(r.Context(), pcfg, body.OrderID); err != nil {
 		InternalError(w, "PayPal capture failed")
 		return
 	} else if status, _ := result["status"].(string); status != "COMPLETED" {
@@ -109,21 +123,20 @@ func (h *BillingHandler) PayPalCapture(w http.ResponseWriter, r *http.Request) {
 
 // ── PayPal REST API helpers ───────────────────────────────────────────────
 
-func (h *BillingHandler) payPalBaseURL() string {
-	if h.paymentConfig().PayPalSandbox {
+func (h *BillingHandler) payPalBaseURL(cfg PaymentConfig) string {
+	if cfg.PayPalSandbox {
 		return "https://api-m.sandbox.paypal.com"
 	}
 	return "https://api-m.paypal.com"
 }
 
-func (h *BillingHandler) payPalAccessToken(ctx context.Context) (string, error) {
-	pcfg := h.paymentConfig()
+func (h *BillingHandler) payPalAccessToken(ctx context.Context, cfg PaymentConfig) (string, error) {
 	p := strings.NewReader("grant_type=client_credentials")
-	req, err := http.NewRequestWithContext(ctx, "POST", h.payPalBaseURL()+"/v1/oauth2/token", p)
+	req, err := http.NewRequestWithContext(ctx, "POST", h.payPalBaseURL(cfg)+"/v1/oauth2/token", p)
 	if err != nil {
 		return "", fmt.Errorf("paypal token request: %w", err)
 	}
-	req.SetBasicAuth(pcfg.PayPalClientID, pcfg.PayPalSecret)
+	req.SetBasicAuth(cfg.PayPalClientID, cfg.PayPalSecret)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	resp, err := h.payPalClient.Do(req)
 	if err != nil {
@@ -143,8 +156,8 @@ func (h *BillingHandler) payPalAccessToken(ctx context.Context) (string, error) 
 	return r.AccessToken, nil
 }
 
-func (h *BillingHandler) payPalCreateOrder(ctx context.Context, credits int, amount, userID string) (string, string, error) {
-	token, err := h.payPalAccessToken(ctx)
+func (h *BillingHandler) payPalCreateOrder(ctx context.Context, cfg PaymentConfig, credits int, amount, userID string) (string, string, error) {
+	token, err := h.payPalAccessToken(ctx, cfg)
 	if err != nil {
 		return "", "", err
 	}
@@ -165,7 +178,7 @@ func (h *BillingHandler) payPalCreateOrder(ctx context.Context, credits int, amo
 			},
 		},
 	})
-	req, err := http.NewRequestWithContext(ctx, "POST", h.payPalBaseURL()+"/v2/checkout/orders", strings.NewReader(string(body)))
+	req, err := http.NewRequestWithContext(ctx, "POST", h.payPalBaseURL(cfg)+"/v2/checkout/orders", strings.NewReader(string(body)))
 	if err != nil {
 		return "", "", fmt.Errorf("paypal create request: %w", err)
 	}
@@ -195,12 +208,12 @@ func (h *BillingHandler) payPalCreateOrder(ctx context.Context, credits int, amo
 	return r.ID, "", nil
 }
 
-func (h *BillingHandler) payPalCaptureOrder(ctx context.Context, orderID string) (map[string]interface{}, error) {
-	token, err := h.payPalAccessToken(ctx)
+func (h *BillingHandler) payPalCaptureOrder(ctx context.Context, cfg PaymentConfig, orderID string) (map[string]interface{}, error) {
+	token, err := h.payPalAccessToken(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, "POST", h.payPalBaseURL()+"/v2/checkout/orders/"+orderID+"/capture", nil)
+	req, err := http.NewRequestWithContext(ctx, "POST", h.payPalBaseURL(cfg)+"/v2/checkout/orders/"+orderID+"/capture", nil)
 	if err != nil {
 		return nil, fmt.Errorf("paypal capture request: %w", err)
 	}
