@@ -71,6 +71,14 @@ type Config struct {
 	// 无限膨胀。设为 <= 0 时回落默认值（**不会**变成"立即删光"）。
 	NotificationRetentionDays int
 
+	// AuditRetentionDays 审计日志的保留天数（默认 180）。
+	//
+	// 比通知的 90 天更长：审计是合规与事后追责的依据，"上季度那次越权操作
+	// 是谁做的"必须还能查到。同样设上限是为了让这张表不会无限膨胀 ——
+	// 审计表按每个请求一行写入，增长速度比通知快一个量级。
+	// 设为 <= 0 时回落默认值（**不会**变成"立即删光"）。
+	AuditRetentionDays int
+
 	// Cookie
 	CookieSecure bool
 
@@ -222,6 +230,7 @@ func loadConfig() *Config {
 		EmailBloomEnabled:         isTruthy(getEnv("EMAIL_BLOOM_FILTER_ENABLED", "true")),
 		EmailBloomCapacity:        uint64(getInt("EMAIL_BLOOM_CAPACITY", 100000)),
 		NotificationRetentionDays: getInt("NOTIFICATION_RETENTION_DAYS", 90),
+		AuditRetentionDays:        getInt("AUDIT_RETENTION_DAYS", 180),
 		EmailBloomFPRate:          getFloat("EMAIL_BLOOM_FP_RATE", 0.001),
 		// Cookie Secure：显式配置优先；未配置时**按部署协议推导**（见 cookieSecure()）。
 		CookieSecure:       cookieSecure(),

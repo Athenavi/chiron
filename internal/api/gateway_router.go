@@ -281,6 +281,9 @@ func NewGatewayRouter(
 	// 已读与未读一视同仁 —— 90 天没点开的通知保留下去既不会被看也不会被清理。
 	notifyMgr.StartRetentionSweep(lifecycleCtx, 24*time.Hour, cfg.NotificationRetentionDays)
 
+	// 审计日志保留期清理（M3）在 settingsStore 初始化之后再启动 —— 它需要
+	// 按轮读取 `system_settings.audit`，见下方 StartAuditRetentionSweep 调用。
+
 	// 注册邮箱判重布隆过滤器（按租户分片）：默认开启，可用 EMAIL_BLOOM_FILTER_ENABLED=false 关闭。
 	// 它只做快速否定以跳过 DB 判重；预热在后台异步进行，完成前一律回落 DB，
 	// 真相源始终是 users(tenant_id, email) 唯一索引。
@@ -405,6 +408,15 @@ func NewGatewayRouter(
 	// 后台已保存的存储配置在启动时应用一次（env 初始化之后、订阅之前）：
 	// 「后台改过存储后端」的环境重启后应沿用该配置，而非回退 env。
 	applyStorageFromSettings(context.Background(), settingsStore, fileStore)
+
+	// 审计日志保留期清理（M3）：audit_logs 按**每个请求一行**写入，增长比通知表
+	// 快一个量级，此前没有任何清理机制。
+	//
+	// 每轮都从 `system_settings.audit` 读 retention_days（后台改完下一轮即生效），
+	// 读不到时回落到 AUDIT_RETENTION_DAYS / 内置默认 180；非法值同样回落 ——
+	// 绝不把"配置写坏"解释成"删光全部审计"。
+	// 每轮清理本身也会写一条审计，避免"删了审计却查不到是谁删的"。
+	StartAuditRetentionSweep(lifecycleCtx, 24*time.Hour, settingsStore, cfg.AuditRetentionDays)
 
 	// 系统设置变更订阅（批 B-2′）：rate_limit / cors / payment / storage 跨副本即时热更。
 	// 必须晚于 billingHandler 构造：订阅者需要它来重载 payment 分类的支付凭据。

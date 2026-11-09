@@ -1,14 +1,21 @@
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, computed } from 'vue'
 import { message } from 'ant-design-vue'
 import type { TableColumnsType } from 'ant-design-vue'
 import dayjs, { type Dayjs } from 'dayjs'
-import { queryAuditLogs } from '../../api/audit'
+import { useRoute } from 'vue-router'
+import { exportAuditCsv, auditExportFileName, queryAuditLogs } from '../../api/audit'
 import type { AuditLog } from '../../api/audit'
+import { getSettings, saveSettings } from '../../api/admin'
+import { blobErrorPayload, downloadBlob } from '../../utils/transactionExport'
 
 import { useI18n } from 'vue-i18n'
 import { serverErrorMessage } from '../../utils/apiError'
 const { t } = useI18n()
+const route = useRoute()
+// /tenant/audit 与 /admin/audit 复用同一个视图。保留天数属于**平台级**运行参数
+// （后端写 system_settings.tenant_id=0），租户后台不该出现这个入口。
+const isTenantArea = computed(() => route?.path?.startsWith('/tenant') ?? false)
 const loading = ref(false)
 const logs = ref<AuditLog[]>([])
 const total = ref(0)
@@ -98,6 +105,91 @@ function formatDetails(d: unknown): string {
   try { return JSON.stringify(d, null, 2) } catch { return String(d) }
 }
 
+// ── 导出（M3）──
+
+const exporting = ref(false)
+
+/**
+ * 导出当前筛选条件下的审计记录（CSV）。
+ *
+ * 两个易错点：
+ *  1. **必须带当前过滤条件**：用户点了"导出"，期望拿到的是这一屏的全量，
+ *     而不是另一套口径 —— 否则会以为漏了记录。
+ *  2. `responseType: 'blob'` 下 4xx 的响应体也是 Blob，拿不到 `.error` 字段，
+ *     所以要读回文本再解析；否则"记录太多，请缩小范围"这句唯一有用的提示会丢失。
+ */
+async function exportCsv() {
+  if (exporting.value) return
+  exporting.value = true
+  try {
+    const range = filters.dateRange?.length === 2 ? filters.dateRange : defaultRange()
+    const blob = await exportAuditCsv({
+      user_id: filters.user_id || undefined,
+      action: filters.action || undefined,
+      resource_type: filters.resource_type || undefined,
+      from: fmt(range[0]),
+      to: fmt(range[1]),
+    })
+    downloadBlob(blob, auditExportFileName())
+    message.success(t('admin.audit_export_started'))
+  } catch (e) {
+    const data = (e as { response?: { data?: unknown } })?.response?.data
+    if (data instanceof Blob) {
+      const payload = await blobErrorPayload(data)
+      if (payload?.message) {
+        message.error(payload.message)
+        return
+      }
+    }
+    message.error(t('admin.audit_export_failed'))
+  } finally {
+    exporting.value = false
+  }
+}
+
+// ── 保留天数（M3，仅平台后台）──
+//
+// 存在 `system_settings.audit.retention_days`，清理循环**每轮**重读，
+// 所以保存后下一轮（≤24h）即生效，不必重启。
+const retentionDays = ref<number | undefined>(undefined)
+const retentionLoading = ref(false)
+const retentionSaving = ref(false)
+
+async function loadRetention() {
+  if (isTenantArea.value) return
+  retentionLoading.value = true
+  try {
+    const cfg = await getSettings('audit')
+    const raw = cfg.retention_days
+    const n = typeof raw === 'number' ? raw : Number(raw)
+    // 用 undefined 而不是 null：antd 的 a-input-number 不接受 null，
+    // 空值必须用 undefined 表示"未设置"。
+    retentionDays.value = Number.isFinite(n) && n > 0 ? n : undefined
+  } catch {
+    // 读不到就用空值展示占位：这是次要配置，不该打断审计查询。
+    retentionDays.value = undefined
+  } finally {
+    retentionLoading.value = false
+  }
+}
+
+async function saveRetention() {
+  const days = Number(retentionDays.value)
+  if (!Number.isFinite(days) || days <= 0) {
+    message.warning(t('admin.audit_retention_invalid'))
+    return
+  }
+  retentionSaving.value = true
+  try {
+    await saveSettings('audit', { retention_days: Math.round(days) })
+    message.success(t('admin.audit_retention_saved'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, t('admin.audit_retention_save_failed')))
+  } finally {
+    retentionSaving.value = false
+  }
+}
+
 const columns: TableColumnsType = [
   { title: t('common.time'), dataIndex: 'created_at', key: 'created_at', width: 180, customRender: ({ text }) => formatTime(text) },
   { title: t('admin.user_2'), dataIndex: 'user_id', key: 'user_id', width: 140, ellipsis: true },
@@ -111,6 +203,7 @@ const columns: TableColumnsType = [
 onMounted(() => {
   filters.dateRange = defaultRange()
   fetchLogs()
+  void loadRetention()
 })
 </script>
 
@@ -169,7 +262,43 @@ onMounted(() => {
       >
         {{ $t('auth.reset') }}
       </a-button>
+      <a-button
+        class="u-full-sm"
+        :loading="exporting"
+        @click="exportCsv"
+      >
+        {{ $t('admin.audit_export') }}
+      </a-button>
     </div>
+
+    <!-- 保留天数（仅平台后台）：写进 system_settings.audit，清理循环每轮重读，
+         所以保存后下一轮（≤24h）生效，不需要重启。 -->
+    <a-card
+      v-if="!isTenantArea"
+      size="small"
+      class="audit-retention-card"
+      :title="$t('admin.audit_retention_title')"
+    >
+      <div class="audit-retention-body">
+        <span class="audit-retention-desc">{{ $t('admin.audit_retention_desc') }}</span>
+        <a-input-number
+          v-model:value="retentionDays"
+          :min="1"
+          :max="3650"
+          :precision="0"
+          :disabled="retentionLoading"
+          style="width: 140px"
+        />
+        <a-button
+          type="primary"
+          size="small"
+          :loading="retentionSaving"
+          @click="saveRetention"
+        >
+          {{ $t('common.save') }}
+        </a-button>
+      </div>
+    </a-card>
 
     <a-table
       :columns="columns"
@@ -270,6 +399,21 @@ onMounted(() => {
   flex-wrap: wrap;
   gap: 8px;
   margin-bottom: 16px;
+}
+.audit-retention-card {
+  margin-bottom: 16px;
+}
+.audit-retention-body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+.audit-retention-desc {
+  flex: 1 1 320px;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  line-height: 1.6;
 }
 .audit-detail-block {
   margin-top: 16px;

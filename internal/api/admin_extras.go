@@ -359,6 +359,9 @@ var settingsCategories = []string{
 	"rate_limit", "degradation", "cache", "api_key",
 	"agent", "llm", "storage", "payment", "redis", "postgres", "cors", "s3",
 	"python",
+	// audit：审计日志保留天数（M3）。放在系统设置里而不是另开一个专用端点：
+	// 它就是一个整数阈值，与其它运行参数同性质；专用端点只会多一套校验与文档。
+	"audit",
 }
 
 func validSettingsCategory(c string) bool {
