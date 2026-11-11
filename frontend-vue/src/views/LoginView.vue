@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { Card, Form, FormItem, Input, Button, Alert, Space, Tabs, TabPane, message } from 'ant-design-vue'
 import { MailOutlined, LockOutlined, MobileOutlined, SafetyOutlined } from '@ant-design/icons-vue'
@@ -38,6 +38,14 @@ const rules: Record<string, Rule[]> = {
 }
 
 const error = ref('')
+
+// MFA 两步登录：密码通过但需要验证码时切到这一步。
+//
+// 后端在双因子已启用时**不签发**正式 token，只返回一个 5 分钟有效的挑战令牌
+// （独立密钥签名，无法当会话令牌用）。所以这一步不能省略 —— 否则开启 MFA 的
+// 用户会在登录页被静默卡住（既没 token 也没错误提示）。
+const mfaStep = ref(false)
+const mfaCode = ref('')
 
 // ── 人机验证（管理员启用或同 IP 失败升级时要求；两个标签页共用） ──
 
@@ -346,10 +354,16 @@ async function handleLogin() {
     return
   }
   try {
-    await authStore.login(form.value.email, form.value.password, {
+    const result = await authStore.login(form.value.email, form.value.password, {
       token: captchaToken.value,
       randstr: captchaRandstr.value,
     })
+    // 双因子已启用：后端只给挑战令牌，切到输入验证码这一步。
+    if (result.mfaRequired) {
+      mfaCode.value = ''
+      mfaStep.value = true
+      return
+    }
     // owner/admin 登录后进入管理后台，普通 user 进入对话
     const role = authStore.user?.role
     router.push(role === 'admin' || role === 'owner' ? '/admin' : '/chat')
@@ -372,6 +386,36 @@ async function handleLogin() {
     }
     error.value = apiErr || t('auth.loginFailed')
   }
+}
+
+// MFA 第二步：提交 6 位验证码（或备用码）换取正式 token。
+async function handleMfaVerify() {
+  error.value = ''
+  if (!mfaCode.value.trim()) {
+    error.value = t('auth.mfa_code_hint')
+    return
+  }
+  try {
+    const user = await authStore.completeMfaLogin(mfaCode.value.trim())
+    const role = user?.role
+    router.push(role === 'admin' || role === 'owner' ? '/admin' : '/chat')
+  } catch (e) {
+    const status = errorStatus(e)
+    if (status === 429) {
+      // 后端对验证码尝试次数有限流（5 次/15 分钟）：6 位码只有 10^6 种组合，
+      // 不限次等于让 MFA 退化成"多花几分钟"。
+      error.value = t('auth.mfa_too_many_attempts')
+      return
+    }
+    error.value = serverErrorMessage(e, '') || t('auth.mfa_code_invalid')
+  }
+}
+
+// 回到第一步：挑战令牌过期（5 分钟）或用户输错了账号时用。
+function backToPasswordStep() {
+  mfaStep.value = false
+  mfaCode.value = ''
+  error.value = ''
 }
 </script>
 
@@ -448,8 +492,63 @@ async function handleLogin() {
           />
         </Tabs>
 
+        <!-- 双因子第二步：密码已通过，等验证码 -->
+        <template v-if="mfaStep">
+          <Alert
+            v-if="error"
+            type="error"
+            :message="error"
+            show-icon
+            style="margin-bottom: 16px"
+          />
+
+          <h3 class="mfa-login-title">
+            {{ $t('auth.mfa_login_title') }}
+          </h3>
+          <p class="mfa-login-desc">
+            {{ $t('auth.mfa_login_step') }}
+          </p>
+
+          <Form layout="vertical">
+            <FormItem :label="$t('auth.mfa_code_hint')">
+              <Input
+                v-model:value="mfaCode"
+                :placeholder="$t('auth.mfa_code_hint')"
+                size="large"
+                :maxlength="12"
+                autocomplete="one-time-code"
+                :autofocus="true"
+                @press-enter="handleMfaVerify"
+              />
+            </FormItem>
+            <FormItem>
+              <Space
+                direction="vertical"
+                style="width: 100%"
+              >
+                <Button
+                  type="primary"
+                  block
+                  size="large"
+                  :loading="authStore.loading"
+                  @click="handleMfaVerify"
+                >
+                  {{ $t('auth.mfa_login_verify') }}
+                </Button>
+                <Button
+                  type="link"
+                  block
+                  @click="backToPasswordStep"
+                >
+                  {{ $t('auth.mfa_back_to_password') }}
+                </Button>
+              </Space>
+            </FormItem>
+          </Form>
+        </template>
+
         <!-- 密码登录 -->
-        <template v-if="activeTab === 'password'">
+        <template v-else-if="activeTab === 'password'">
           <Alert
             v-if="error"
             type="error"
@@ -730,6 +829,20 @@ async function handleLogin() {
 </template>
 
 <style scoped>
+/* 双因子第二步：与密码表单同宽，标题略小以免喧宾夺主 */
+.mfa-login-title {
+  margin: 0 0 6px;
+  font-size: 18px;
+  font-weight: var(--fw-semibold);
+}
+
+.mfa-login-desc {
+  margin: 0 0 18px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-2);
+}
+
 .login-container {
   display: grid;
   grid-template-columns: 1fr;

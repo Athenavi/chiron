@@ -387,3 +387,101 @@ export function isValidEmail(email: string): boolean {
   const domain = e.slice(at + 1)
   return domain.includes('.') && !domain.startsWith('.') && !domain.endsWith('.') && !/\s/.test(e)
 }
+
+// ── 双因子认证（MFA / TOTP）──
+//
+// 后端是**两阶段启用**：setup 生成密钥但不启用，必须再用 /enable 提交一次
+// 正确验证码才算启用。原因是扫码后关掉页面的用户，若被算作"已启用"，
+// 下次登录会被要求输入一个他从未成功配置过的验证码 —— 直接锁死账号。
+
+export interface MfaStatus {
+  enabled: boolean
+  /** 已生成密钥但尚未确认：UI 必须提示"还没配完"，否则用户以为开了 */
+  pending_confirmation: boolean
+  recovery_codes_left: number
+}
+
+export interface MfaSetupResult {
+  secret: string
+  otpauth_url: string
+  recovery_codes: string[]
+  /** true 表示此前已启用，本次是重置 —— 旧验证器将失效 */
+  already_enabled: boolean
+}
+
+export async function getMfaStatus(): Promise<MfaStatus> {
+  const { data } = await api.get('/v1/auth/mfa/status')
+  return data?.data ?? { enabled: false, pending_confirmation: false, recovery_codes_left: 0 }
+}
+
+export async function setupMfa(): Promise<MfaSetupResult> {
+  const { data } = await api.post('/v1/auth/mfa/setup')
+  return data?.data
+}
+
+export async function enableMfa(code: string): Promise<void> {
+  await api.post('/v1/auth/mfa/enable', { code })
+}
+
+/** 关闭 MFA：验证码与密码**任一**即可（手机丢了时用密码）。 */
+export async function disableMfa(body: { code?: string; password?: string }): Promise<void> {
+  await api.post('/v1/auth/mfa/disable', body)
+}
+
+/** 登录第二步：用挑战令牌 + 验证码换正式 token。 */
+export async function verifyMfa(challengeToken: string, code: string): Promise<{ token: string; user: AuthUser }> {
+  const { data } = await api.post('/v1/auth/mfa/verify', {
+    challenge_token: challengeToken,
+    code,
+  })
+  return data?.data
+}
+
+// ── 账号注销 ──
+//
+// 后端是"冻结 → 7 天宽限 → 到期归档并清除"三步。申请后账号除**导出**与
+// **撤销**外的所有操作都会被服务端 403（不是前端隐藏按钮：绕过前端照样被拦）。
+//
+// 因此前端必须如实展示剩余天数 —— 用户要知道自己还有多久能改主意。
+
+export interface AccountDeletionStatus {
+  status: 'active' | 'pending_deletion' | 'purged'
+  requested_at?: string
+  due_at?: string
+  /** 距自动清除的剩余天数（后端按服务端时钟计算，客户端时间不可信） */
+  days_remaining: number
+  can_export: boolean
+  can_cancel: boolean
+}
+
+export async function getAccountDeletionStatus(): Promise<AccountDeletionStatus> {
+  const { data } = await api.get('/v1/me/deletion')
+  return data?.data ?? { status: 'active', days_remaining: 0, can_export: false, can_cancel: false }
+}
+
+/** 申请注销并冻结资产。`confirm` 必填：冻结是破坏性动作，不能由误触触发。 */
+export async function requestAccountDeletion(body: {
+  password?: string
+  confirm: boolean
+}): Promise<AccountDeletionStatus> {
+  const { data } = await api.post('/v1/me/deletion', body)
+  return data?.data
+}
+
+/** 在宽限期内撤销注销，资产按冻结前的状态精确恢复。 */
+export async function cancelAccountDeletion(): Promise<AccountDeletionStatus> {
+  const { data } = await api.post('/v1/me/deletion/cancel')
+  return data?.data
+}
+
+/** 下载个人信息（数据可携带权）。注销冻结期仍可用。 */
+export async function downloadMyData(): Promise<void> {
+  const { data } = await api.get('/v1/me/export', { responseType: 'blob' })
+  const url = URL.createObjectURL(data as Blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'chiron-personal-data.json'
+  a.click()
+  // 必须释放：否则 blob 会一直占着内存直到页面关闭。
+  URL.revokeObjectURL(url)
+}

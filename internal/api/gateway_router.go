@@ -259,7 +259,12 @@ func NewGatewayRouter(
 	// Auth
 	authenticator := auth.NewAuthenticator(cfg.JWTSecret, cfg.JWTExpiration)
 	authHandler := NewAuthHandler(cfg)
-	authMW := AuthMiddleware(authenticator)
+	// 闸门串在鉴权**之后**：它需要 claims 里的 userID。
+	// 放在这里而不是逐条路由包：全仓 200+ 条鉴权路由，逐条加必漏；
+	// 新增路由默认受管，而不是默认漏管。
+	authMW := func(next http.Handler) http.Handler {
+		return AuthMiddleware(authenticator)(AccountDeletionGate(next))
+	}
 
 	// SSO 三方登录 + 人机验证（防接口滥用）+ 短信验证码登录 + 邮箱验证码/密码重置
 	ssoHandler := NewSSOHandler(authenticator, cfg)
@@ -417,6 +422,11 @@ func NewGatewayRouter(
 	// 绝不把"配置写坏"解释成"删光全部审计"。
 	// 每轮清理本身也会写一条审计，避免"删了审计却查不到是谁删的"。
 	StartAuditRetentionSweep(lifecycleCtx, 24*time.Hour, settingsStore, cfg.AuditRetentionDays)
+
+	// 账号注销到期清理：宽限期（7 天）过后归档并清除个人数据。
+	// 传入 fileStore 是必需的：没有归档能力时**不会**删任何数据
+	// （见 purgeDueAccounts 的 nil 分支）—— "先归档后才删"是硬约束。
+	StartAccountPurgeSweep(lifecycleCtx, time.Hour, fileStore)
 
 	// 系统设置变更订阅（批 B-2′）：rate_limit / cors / payment / storage 跨副本即时热更。
 	// 必须晚于 billingHandler 构造：订阅者需要它来重载 payment 分类的支付凭据。

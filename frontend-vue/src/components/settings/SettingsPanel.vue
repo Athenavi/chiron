@@ -12,6 +12,8 @@ import { Button, Input, Form, FormItem, message, Popconfirm, Tag, Spin, Slider }
 import { SafetyOutlined, MobileOutlined, ExportOutlined, DeleteOutlined, LinkOutlined } from '@ant-design/icons-vue'
 import EmptyState from '../common/EmptyState.vue'
 import HarnessProfilePanel from './HarnessProfilePanel.vue'
+import MfaSettings from './MfaSettings.vue'
+import AccountDeletionSettings from './AccountDeletionSettings.vue'
 import ShortcutSettingsPanel from './ShortcutSettingsPanel.vue'
 import LanguageSwitcher from '../common/LanguageSwitcher.vue'
 import { useAuthStore } from '../../stores/auth'
@@ -627,6 +629,12 @@ onUnmounted(() => {
           </FormItem>
         </Form>
       </div>
+
+      <!-- 双因子认证：后端两阶段启用（setup 不置 enabled，须用验证码确认） -->
+      <MfaSettings />
+
+      <!-- 账号注销：冻结 → 7 天宽限可撤销 → 到期归档并清除 -->
+      <AccountDeletionSettings />
     </a-tab-pane>
 
     <!-- ── 数据管理 ── -->

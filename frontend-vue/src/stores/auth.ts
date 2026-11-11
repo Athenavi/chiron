@@ -49,6 +49,14 @@ export const useAuthStore = defineStore('auth', () => {
   const token = ref<string>('')
   let tokenInit: Promise<void> | null = null
 
+  /**
+   * MFA 两步登录的中间态：密码通过后后端返回的短期挑战令牌。
+   *
+   * 只存在内存里，**不持久化**：它 5 分钟就过期，落盘没有任何收益，
+   * 反而多一个可被读取的凭据副本。
+   */
+  const mfaChallenge = ref<string>('')
+
   /** 统一写入内存 token 与请求层 Bearer */
   function applyToken(t: string) {
     token.value = t
@@ -84,12 +92,49 @@ export const useAuthStore = defineStore('auth', () => {
       })
       const d = response.data?.data
       if (!d) throw new Error('invalid login response')
+
+      // 两步登录：开启双因子时后端**不签发**正式 token，只返回一个短期挑战令牌
+      // （独立密钥签名，无法当会话令牌用）。此时绝不能 applyToken —— 那会把
+      // 空值写进请求层，用户被静默卡在登录页且没有任何错误提示。
+      // 返回 mfaRequired 让登录页切到"输入验证码"这一步。
+      if (d.mfa_required) {
+        mfaChallenge.value = d.challenge_token || ''
+        return { mfaRequired: true as const }
+      }
+
       // Web 走 httpOnly cookie；桌面端 file:// 跨站拿不到 cookie，applyToken 同时
       // 把 token 交给请求层走 Bearer（仅桌面端持久化）。
       applyToken(d.token)
       user.value = d.user
       persistUserToStorage(d.user)
-      return d
+      mfaChallenge.value = ''
+      // 保留原有的响应字段（token/user），只额外附加 mfaRequired ——
+      // 既有调用方与测试仍在读 d.token，改结构会平白破坏它们。
+      return { ...d, mfaRequired: false as const }
+    } finally {
+      loading.value = false
+    }
+  }
+
+  /**
+   * 登录第二步：用挑战令牌 + 验证码换取正式 token。
+   *
+   * 验证码与备用码共用同一个输入框：用户不会区分"我现在输的是哪种"。
+   */
+  async function completeMfaLogin(code: string) {
+    loading.value = true
+    try {
+      const response = await api.post('/v1/auth/mfa/verify', {
+        challenge_token: mfaChallenge.value,
+        code,
+      })
+      const d = response.data?.data
+      if (!d?.token || !d?.user) throw new Error('invalid mfa response')
+      applyToken(d.token)
+      user.value = d.user
+      persistUserToStorage(d.user)
+      mfaChallenge.value = ''
+      return d.user as User
     } finally {
       loading.value = false
     }
@@ -197,8 +242,10 @@ export const useAuthStore = defineStore('auth', () => {
     loading,
     isAuthenticated,
     isAdmin,
+    mfaChallenge,
     initToken,
     login,
+    completeMfaLogin,
     register,
     fetchProfile,
     bootstrapSession,

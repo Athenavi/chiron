@@ -35,4 +35,11 @@ func registerAuthRoutes(mux *http.ServeMux, authHandler *AuthHandler, authMW, rl
 	mux.Handle("POST /v1/auth/mfa/disable", authMW(rlMW(http.HandlerFunc(authHandler.MFADisable))))
 	// 个人信息导出（数据可携带权）：身份只来自会话，限流防批量拉取。
 	mux.Handle("GET /v1/me/export", authMW(rlMW(http.HandlerFunc(authHandler.ExportMyData))))
+	// ── 账号注销（冻结 → 宽限期可撤销 → 到期归档）──
+	// 这四个端点必须**放行**给 pending_deletion 状态的账号：
+	// 它们是"只允许下载或导出、以及撤销"这条规则的落地处。
+	// 其余所有端点由 AccountDeletionGate 统一 403（见 account_deletion_gate.go）。
+	mux.Handle("GET /v1/me/deletion", authMW(rlMW(http.HandlerFunc(authHandler.AccountDeletionStatus))))
+	mux.Handle("POST /v1/me/deletion", authMW(rlMW(http.HandlerFunc(authHandler.RequestAccountDeletion))))
+	mux.Handle("POST /v1/me/deletion/cancel", authMW(rlMW(http.HandlerFunc(authHandler.CancelAccountDeletion))))
 }

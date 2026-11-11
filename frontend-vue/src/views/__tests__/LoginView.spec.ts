@@ -41,7 +41,12 @@ const authApi = vi.hoisted(() => ({
 
 /** 稳定的 store 替身（每次调用返回同一个对象，否则没法断言 login 被怎么调） */
 const authStoreMock = vi.hoisted(() => ({
-  login: vi.fn((): Promise<void> => Promise.resolve()),
+  // 返回类型必须与真实 store 一致：`login()` 一直返回响应对象（含 token/user），
+  // 2026 起还附带 `mfaRequired`。此前这里写成 `Promise<void>` 并 resolve undefined，
+  // 与真实契约不符 —— 只是当时 LoginView 不读返回值所以没暴露。
+  // 替身与真实实现不一致，等于测试在一个不存在的行为上通过。
+  login: vi.fn((): Promise<{ mfaRequired: boolean }> => Promise.resolve({ mfaRequired: false })),
+  completeMfaLogin: vi.fn((): Promise<{ role?: string }> => Promise.resolve({})),
   user: null as null | { role?: string },
   loading: false,
   token: '',
@@ -68,7 +73,10 @@ function mountView() {
 describe('LoginView（此前零测试）', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    authStoreMock.login.mockResolvedValue(undefined)
+    // 与真实契约一致：login() 返回响应对象，不是 undefined。
+    // 写成 undefined 会让 LoginView 读 `result.mfaRequired` 时 TypeError，
+    // 且被 catch 吞成"登录失败"—— 表现为路由没跳转而错误提示为空。
+    authStoreMock.login.mockResolvedValue({ mfaRequired: false })
     authStoreMock.user = null
     authApi.getCaptchaPublicConfig.mockResolvedValue({ enabled: false })
     authApi.getSmsStatus.mockResolvedValue({ enabled: true, login_enabled: true })
@@ -143,6 +151,65 @@ describe('LoginView（此前零测试）', () => {
     expect(authApi.sendSmsCode).toHaveBeenCalled()
     const after = wrapper.findAll('button').find(b => /获取验证码|发送|重发|send|\d/i.test(b.text()))
     expect(after!.attributes('disabled')).toBeDefined()
+    wrapper.unmount()
+  })
+
+  // ── 双因子登录（两步）──
+  //
+  // 这条路径此前零覆盖，而它一旦接错，**开启 MFA 的用户会被锁在应用外**：
+  // 后端在双因子启用时不签发正式 token（只给 5 分钟的挑战令牌），
+  // 若登录页读完 handleLogin 就直接 router.push，用户会进到一个没有 token 的
+  // 页面，随后每个请求 401 —— 看起来像"登录成功但什么都打不开"。
+
+  it('★ 登录：需要 MFA 时停在验证码这一步，不跳转', async () => {
+    authStoreMock.login.mockResolvedValue({ mfaRequired: true })
+    // router 是模块级单例，前面的用例可能已把路径推到 /admin。
+    // 先归位，否则"没有跳转"这个断言会被残留状态误判（实测踩过）。
+    await router.push('/')
+    await flushPromises()
+    const before = router.currentRoute.value.path
+
+    const wrapper = mountView()
+    await flushPromises()
+    const vm = wrapper.vm as unknown as {
+      form: { email: string; password: string }
+      handleLogin: () => Promise<void>
+      mfaStep: boolean
+    }
+    vm.form.email = 'mfa@example.com'
+    vm.form.password = 'secret-123'
+
+    await vm.handleLogin()
+    await flushPromises()
+
+    // 必须在原地等待验证码，而不是带着「没有 token」的状态进应用。
+    expect(vm.mfaStep).toBe(true)
+    expect(router.currentRoute.value.path).toBe(before)
+    wrapper.unmount()
+  })
+
+  it('★ 登录：提交验证码后按角色跳转', async () => {
+    authStoreMock.login.mockResolvedValue({ mfaRequired: true })
+    authStoreMock.completeMfaLogin.mockResolvedValue({ role: 'admin' })
+    const wrapper = mountView()
+    await flushPromises()
+    const vm = wrapper.vm as unknown as {
+      form: { email: string; password: string }
+      handleLogin: () => Promise<void>
+      mfaCode: string
+      handleMfaVerify: () => Promise<void>
+    }
+    vm.form.email = 'mfa@example.com'
+    vm.form.password = 'secret-123'
+    await vm.handleLogin()
+    await flushPromises()
+
+    vm.mfaCode = '123456'
+    await vm.handleMfaVerify()
+    await flushPromises()
+
+    expect(authStoreMock.completeMfaLogin).toHaveBeenCalledWith('123456')
+    expect(router.currentRoute.value.path).toBe('/admin')
     wrapper.unmount()
   })
 })
