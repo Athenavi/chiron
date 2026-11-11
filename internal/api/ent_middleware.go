@@ -18,8 +18,9 @@ import (
 //  2. 返回 nil（用户无 ent 角色配置）→ 回退旧权限体系 auth.HasPermission。
 //  3. 返回非 nil（含空切片）→ 仅当 perm 在切片内放行，否则 403；
 //     空切片表示"明确无权限"，禁止回退旧体系（防越权）。
-//  4. LoadEffectivePerms 出错（ent 基础设施故障）→ fail-open 回退
-//     auth.HasPermission + slog.Warn，保证故障不阻断管理面。
+//  4. LoadEffectivePerms 出错（ent 基础设施故障）→ **fail-close**（拒绝请求 +
+//     slog.Warn）。授权判定读不到依据时应当拒绝而不是放宽 —— 用户可能已被
+//     ent 角色明确剥夺某权限，故障期间回退 legacy 就是越权窗口。
 //
 // 挂载现状：各企业模块的 RegisterRoutes 均以此为 guard，见 gateway_router.go 的
 // ent 注册区（SSO / 短信 / 人机验证 / 身份 / 市场 / 策略 / 模型路由 / Webhook /
@@ -49,7 +50,13 @@ func RequireEntPerm(perm string) func(http.Handler) http.Handler {
 // 的不一致（成本中心等需要自行判定权限的 handler 直接调用本函数）：
 //   - 用户无 ent 角色配置（LoadEffectivePerms 返回 nil）→ 回退 auth.HasPermission；
 //   - 用户有 ent 配置（含空切片 = 明确无权限）→ 仅以聚合权限为准，禁止回退；
-//   - ent 基础设施故障（如 PG 查询失败）→ fail-open 回退 auth.HasPermission + 告警。
+//   - ent 基础设施故障（如 PG 查询失败）→ **fail-close**（直接拒绝 + 告警）。
+//
+// 最后一条此前写的是 "fail-open 回退 auth.HasPermission"：那是个越权窗口 ——
+// 用户可能已被 ent 角色**明确剥夺**某权限（perms 为空切片），PG/Redis 抖动期间
+// 却因回退到 legacy 角色权限而被放行。授权判定读不到就应当拒绝，不是放宽。
+// 代码早已改成 fail-close（见下方 return false），这里同步注释，避免读文档的人
+// 误以为故障期间是放行的。
 func AllowedByEntOrLegacy(ctx context.Context, claims *auth.Claims, perm string) bool {
 	if claims == nil || claims.UserID == "" {
 		return false

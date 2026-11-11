@@ -102,13 +102,26 @@ async function settleAsync(times = 6) {
 let rendered: { id: string; code: string }[] = []
 let initialized: Record<string, unknown>[] = []
 let failRender = false
+// bindFunctions 的调用记录：`boundAfterInsert` 记录"调用那一刻容器里是否已有 svg"，
+// 用来证明我们是在 innerHTML 写入**之后**才调用的（mermaid 的要求）。
+let bindCalls: { called: number; svgAlreadyInserted: boolean }[] = []
+let failBind = false
 
 const fakeAdapter: MermaidAdapter = {
   initialize(options) { initialized.push(options) },
   async render(id, code) {
     rendered.push({ id, code })
     if (failRender) throw new Error('bad diagram')
-    return { svg: `<svg data-mmd-id="${id}"></svg>` }
+    return {
+      svg: `<svg data-mmd-id="${id}"></svg>`,
+      bindFunctions(element: Element) {
+        if (failBind) throw new Error('bind failed')
+        bindCalls.push({
+          called: bindCalls.length + 1,
+          svgAlreadyInserted: !!element.querySelector('svg'),
+        })
+      },
+    }
   },
 }
 
@@ -122,6 +135,8 @@ beforeEach(() => {
   rendered = []
   initialized = []
   failRender = false
+  bindCalls = []
+  failBind = false
   setMermaidAdapter(fakeAdapter)
   setHighlightAdapter(fakeHighlighter)
 })
@@ -212,6 +227,36 @@ describe('MessageItem（mermaid 图表）', () => {
     await settleAsync()
     expect(rendered).toHaveLength(0)
     expect(initialized).toHaveLength(0)
+  })
+
+  // mermaid 的 RenderResult 带有可选的 bindFunctions：图内节点的点击/悬浮全靠它
+  // 挂事件监听。此前适配层只解构 `{ svg }`，把它静默丢弃 —— 图能画出来但点不动，
+  // 且失败方式是"没反应"，没有任何报错。
+  it('调用 bindFunctions 挂载图内交互，且在 svg 插入 DOM 之后', async () => {
+    const wrapper = mountText('```mermaid\ngraph TD;\nA-->B;\n```')
+    await settleAsync()
+
+    expect(bindCalls).toHaveLength(1)
+    // 官方要求：必须等 svg 进了 DOM 再调用，否则按 id/class 查不到节点。
+    expect(bindCalls[0]!.svgAlreadyInserted).toBe(true)
+    expect(wrapper.find('.mermaid-diagram svg').exists()).toBe(true)
+  })
+
+  it('bindFunctions 抛错不影响图表展示（图已画出，只是少交互）', async () => {
+    failBind = true
+    const wrapper = mountText('```mermaid\ngraph TD;\nA-->B;\n```')
+    await settleAsync()
+
+    // 图仍然正常渲染；不能被误判成"语法错误"而盖住内容。
+    expect(wrapper.find('.mermaid-diagram svg').exists()).toBe(true)
+    expect(wrapper.find('.mermaid-error').exists()).toBe(false)
+  })
+
+  it('渲染失败时不调用 bindFunctions（没有 svg 可绑）', async () => {
+    failRender = true
+    mountText('```mermaid\nnot a diagram\n```')
+    await settleAsync()
+    expect(bindCalls).toHaveLength(0)
   })
 })
 

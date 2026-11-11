@@ -101,6 +101,12 @@ type AuthHandler struct {
 	auth    *auth.Authenticator
 	cfg     *config.Config
 	captcha *CaptchaHandler
+	// lockout 是**账号维度**的密码登录失败锁定（见 login_lockout.go）。
+	// 与 captcha 的 IP 维度计数并存：后者挡单机爆破，前者挡分布式撞库。
+	lockout *loginLockout
+	// mfaLimiter 按用户限制 TOTP 验证码尝试次数（见 mfa.go）。
+	// 6 位数字只有 10^6 种组合，不限次数的话 MFA 只是"多花几分钟"。
+	mfaLimiter *mfaAttemptLimiter
 	// mail 可选：注入后注册流程支持"邮箱验证码校验 + 欢迎邮件"。
 	mail *MailHandler
 	// emailBloom 可选：注入后注册流程先用布隆过滤器快速否定"该邮箱未注册"，
@@ -112,8 +118,10 @@ type AuthHandler struct {
 
 func NewAuthHandler(cfg *config.Config) *AuthHandler {
 	return &AuthHandler{
-		auth: auth.NewAuthenticator(cfg.JWTSecret, cfg.JWTExpiration),
-		cfg:  cfg,
+		auth:       auth.NewAuthenticator(cfg.JWTSecret, cfg.JWTExpiration),
+		cfg:        cfg,
+		lockout:    newLoginLockout(),
+		mfaLimiter: newMFAAttemptLimiter(),
 	}
 }
 
@@ -183,6 +191,13 @@ func (h *AuthHandler) logLoginFailure(ctx context.Context, r *http.Request, emai
 		// 传 nil 会让任何登录失败都触发 nil 解引用 panic（表现为 500）。
 		h.captcha.RecordFailure(ctx, r)
 	}
+	// 账号维度计数：与上面的 IP 计数是**两层**防护，不是替代关系。
+	// 分布式撞库每次来自不同 IP，IP 计数永远到不了阈值，只有账号维度能兜住。
+	// 放在这里而不是各失败分支里，是为了确保"用户不存在"与"密码错误"走同一条
+	// 路径 —— 两者计数不一致会让攻击者借此枚举账号是否存在。
+	if h.lockout != nil {
+		h.lockout.RecordFailure(ctx, email)
+	}
 }
 
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
@@ -204,6 +219,25 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 账号级锁定检查：必须在密码校验**之前**。
+	//
+	// 放在 bcrypt 之后是无效的 —— 那样每次尝试仍会跑完整次哈希（CPU 成本不变），
+	// 而且攻击者能从"响应时间长短"判断账号是否存在、密码对不对。
+	//
+	// 账号不存在时也走同样的判断（不区分），否则"是否被锁"本身就成了账号枚举信号。
+	ctx := r.Context()
+	if h.lockout != nil && h.lockout.Locked(ctx, req.Email) {
+		db.AuditLog(ctx, "", DefaultTenantID, "login_locked_out", "/v1/auth/login",
+			"email="+maskEmail(req.Email), r.RemoteAddr, nil)
+		// 429 而不是 401：这是"你试太多次了，等一会儿"，与"密码错"是两回事，
+		// 用户需要可操作的区分（前端据此提示等待时长）。
+		JSON(w, http.StatusTooManyRequests, APIResponse{
+			Success: false,
+			Error:   "too many failed attempts; account temporarily locked for 15 minutes",
+		})
+		return
+	}
+
 	// 人机验证栅栏：启用后按风险升级强制校验；达到硬上限直接 429
 	if h.captcha != nil {
 		if err := h.captcha.Enforce(w, r, &auth.CaptchaToken{
@@ -215,7 +249,6 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// No dev bypass — always validate against DB
-	ctx := r.Context()
 
 	// 设置租户上下文以绕过 RLS
 	tx, err := db.GlobalDBManager.Begin(ctx)
@@ -235,17 +268,18 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	var user UserResponse
 	var passwordHash string
 	var tenantID int16
+	var totpEnabled bool
 	// F2：不再用 `tenant_id = DefaultTenantID` 过滤 —— 经邀请码注册的用户属于别的
 	// 租户，硬过滤会让它们永远登不进来。改为按 email 取用户，并在同 email 跨租户
 	// 重名时优先默认租户（存量账号行为不变）。
 	err = tx.QueryRow(ctx,
-		`SELECT id, email, name, role, tenant_id, password_hash
+		`SELECT id, email, name, role, tenant_id, password_hash, totp_enabled
 		   FROM users
 		  WHERE email = $1
 		  ORDER BY (tenant_id = $2) DESC, created_at ASC
 		  LIMIT 1`,
 		req.Email, DefaultTenantID,
-	).Scan(&user.ID, &user.Email, &user.Name, &user.Role, &tenantID, &passwordHash)
+	).Scan(&user.ID, &user.Email, &user.Name, &user.Role, &tenantID, &passwordHash, &totpEnabled)
 	if err != nil {
 		slog.Warn("login failed", "email", maskEmail(req.Email), "error", err)
 		h.logLoginFailure(r.Context(), r, req.Email, DefaultTenantID, r.RemoteAddr)
@@ -262,6 +296,11 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	if h.captcha != nil {
 		h.captcha.ClearFailures(r.Context(), r)
 	}
+	// 密码验证通过即清空账号失败计数：否则合法用户偶尔打错几次，
+	// 会在一段时间内持续逼近阈值（每次成功都不归零）。
+	if h.lockout != nil {
+		h.lockout.Clear(ctx, req.Email)
+	}
 
 	// multi-tenant isolation
 	// P1-5: tenant_id 为空直接拒绝登录
@@ -270,6 +309,32 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		Unauthorized(w, "user has no tenant binding; contact admin")
 		return
 	}
+
+	// 已启用双因子：**绝不在此签发正式 token**。
+	//
+	// 这是整个 MFA 的关键分界 —— 密码正确只证明"知道密码"，还差"持有设备"。
+	// 若这里吐 token，等于 MFA 可以被一次请求跳过。
+	// 返回的是短期挑战令牌（独立派生密钥签名，无法通过 AuthMiddleware 的校验），
+	// 客户端拿它去 /v1/auth/mfa/verify 换正式 token。
+	if totpEnabled {
+		challenge, cErr := h.auth.GenerateMFAChallengeToken(user.ID)
+		if cErr != nil {
+			slog.Error("mfa: generate challenge failed", "user_id", user.ID, "error", cErr)
+			InternalError(w, "authentication failed")
+			return
+		}
+		db.AuditLog(r.Context(), user.ID, tenantID, "login_mfa_challenged", "/v1/auth/login",
+			"email="+maskEmail(req.Email), r.RemoteAddr, nil)
+		OK(w, map[string]interface{}{
+			"mfa_required":    true,
+			"challenge_token": challenge,
+			// 明确告知有效期：用户输错几次后挑战过期需要重新登录，
+			// 不说明的话会以为是"密码又被拒了"。
+			"expires_in_seconds": auth.MFAChallengeTTLSeconds(),
+		})
+		return
+	}
+
 	// C1-4：权限优先取 tenant_members（角色真相），查不到回退 auth.RolePermissions。
 	token, err := h.auth.GenerateToken(user.ID, user.Email, user.Role, tenantID,
 		resolveUserPermsDefault(r.Context(), user.ID, user.Role))

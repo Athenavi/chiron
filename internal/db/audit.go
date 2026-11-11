@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/athenavi/chiron/internal/monitor"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -136,8 +137,13 @@ func AuditLog(ctx context.Context, userID string, tenantID int16, action, resour
 			"data":      string(data),
 		},
 	}).Err(); err != nil {
-		slog.Warn("audit log: XAdd failed", "error", err)
+		// 只打 Warn 是不够的：审计写入失败不影响响应，线上很难察觉。
+		// 必须同时计入计数器，让 /metrics 的 audit_log_errors 能反映"审计正在丢"。
+		monitor.Global.AuditLogErrors.Add(1)
+		slog.Warn("audit log: XAdd failed", "error", err, "action", action)
+		return
 	}
+	monitor.Global.AuditLogWrites.Add(1)
 }
 
 // AuditConsumer 审计日志消费者

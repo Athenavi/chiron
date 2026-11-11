@@ -31,6 +31,66 @@ jobs:
       - run: go vet -mod=mod ./...
       - run: go test -mod=mod ./... -count=1
 
+  # ── Go 竞态检测 ─────────────────────────────────────────────────────────
+  #
+  # 为什么单独一个 job：`go test` 不带 -race 时对数据竞争**完全无感** —— 竞态只在
+  # 特定调度下触发，普通测试可能长期全绿，而生产多副本高并发下表现为 panic 或
+  # 静默数据损坏。本仓并发面很宽（snowflake 计数器、三级令牌桶、SSE broadcast、
+  # sessionmap、AtomicStore、审计队列），单靠 code review 看不出来。
+  #
+  # 为什么独立而非并入上面的 `go` job：race 版二进制需要 cgo（CGO_ENABLED=1）
+  # 且运行慢 5~20 倍，混在一起会让「编译失败 / 普通测试失败 / 发现竞态」三种
+  # 结果混在同一个红叉里，排查时得翻完整日志。分开后失败即定位到竞态本身。
+  #
+  # 覆盖范围刻意取 `./...` 而不是挑几个包：竞态往往跨包显现（例如 db 的
+  # atomicRedis 被 api 的中间件读），按目录白名单挑包等于把边界上的竞争
+  # 留给运气。全量在 ubuntu-latest 上约数分钟，可接受。
+  go-race:
+    name: Go race detector
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      # ubuntu-latest 自带 gcc，race 运行时无需额外安装（本地 Windows 无 gcc
+      # 时 `-race` 会报 "cgo: C compiler gcc not found"，只能靠 CI 兜住）。
+      - run: go test -mod=mod -race ./... -count=1
+
+  # ── Go 依赖漏洞门禁 ─────────────────────────────────────────────────────
+  #
+  # dependabot 只负责「把版本升上去」，不做漏洞判定：它不知道某个已升级的版本
+  # 是否仍受 CVE 影响，也不知道新出现的公告是否命中当前依赖树。本仓真实命中过
+  # GO-2026-6859（net/http，靠把 go 指令提到 1.26.11 才消除），说明这道门禁
+  # 有实际拦截价值，不是形式主义。
+  #
+  # 与 release-images.yml 的 Trivy 分工不同：Trivy 扫**镜像里的 OS 包**，
+  # 这里扫**源码实际调用到的 Go 模块**（含标准库），后者能发现"依赖了但没调用"
+  # 之外的真正可达漏洞。
+  go-vuln:
+    name: Go vulnerability check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      # 固定到 v1.7.0：漏洞数据库格式与扫描语义随工具版本变动，浮动 latest
+      # 会让「同一份代码昨天绿今天红」变成无法归因的事。升级时改这里并跑一次
+      # 全仓确认无新增可达漏洞。
+      - run: go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
+      # govulncheck 以非零退出码表示「发现可达漏洞」或「扫描失败」，
+      # 两种情况都应阻断 —— 扫描失败时放行等于门禁形同虚设。
+      #
+      # ⚠ 必须用 GOFLAGS 传 `-mod=mod`，**不能**写成 `govulncheck -mod=mod ./...`：
+      # govulncheck 自身没有 `-mod` 标志，那样会直接 `flag provided but not defined: -mod`
+      # 并非零退出（2026-11-11 本机实测）。GOFLAGS 由底层 go 命令消费才是正确通道。
+      - run: GOFLAGS=-mod=mod govulncheck ./...
+
   # ── Python 引擎 ─────────────────────────────────────────────────────────
   python:
     name: Python engine

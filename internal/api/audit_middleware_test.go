@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/athenavi/chiron/internal/auth"
+	"github.com/athenavi/chiron/internal/monitor"
 )
 
 // 审计日志必须在 handler 返回后仍能写入。
@@ -98,5 +99,47 @@ func TestAuditLogSkipsReadOnlyAndServerErrors(t *testing.T) {
 				t.Fatalf("%s %d：入队=%v，期望 %v", tc.method, tc.status, got, tc.wantLog)
 			}
 		})
+	}
+}
+
+// 队列满时必须计数，不能只打一条 Warn。
+//
+// 为什么这条值得单独测：审计写入是异步且不影响响应的，队列满时"审计静默变少"
+// 在线上没有任何可见症状 —— 日志会淹没在请求日志里。`audit_log_dropped` 是
+// 唯一能把"我们自己来不及消化"暴露到 /metrics 的信号。
+//
+// 这里刻意不启动 worker：把通道填满到 cap 之后，下一次入队必然走 default 分支。
+func TestAuditLogCountsDroppedWhenChannelFull(t *testing.T) {
+	// 排空并填满通道，模拟 worker 跟不上。
+	for len(auditLogCh) > 0 {
+		<-auditLogCh
+	}
+	filler := auditLogTask{userID: "filler"}
+	for len(auditLogCh) < cap(auditLogCh) {
+		auditLogCh <- filler
+	}
+	// 用例结束必须排空，否则后续用例的入队断言会受污染（通道是全局单例）。
+	t.Cleanup(func() {
+		for len(auditLogCh) > 0 {
+			<-auditLogCh
+		}
+	})
+
+	before := monitor.Global.AuditLogDropped.Load()
+
+	h := LoggingMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodPost, "/v1/things", nil)
+	req = req.WithContext(auth.WithClaims(req.Context(), &auth.Claims{UserID: "u1"}))
+
+	h.ServeHTTP(httptest.NewRecorder(), req)
+
+	if got := monitor.Global.AuditLogDropped.Load() - before; got != 1 {
+		t.Fatalf("audit_log_dropped 增量 = %d，期望 1（队列满必须可观测）", got)
+	}
+	// 丢弃意味着没有写进队列：通道长度应保持不变。
+	if len(auditLogCh) != cap(auditLogCh) {
+		t.Fatalf("通道长度 %d 偏离容量 %d，说明丢弃路径被写入了", len(auditLogCh), cap(auditLogCh))
 	}
 }

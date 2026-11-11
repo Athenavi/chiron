@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"time"
@@ -80,6 +81,69 @@ func (a *Authenticator) ValidateToken(tokenStr string) (*Claims, error) {
 // 复制其 claims 重新签发」。它正是「管理员降权后刷新仍保留旧权限」的根因，
 // 已删除。刷新改由 api 层从 users 表重取 role/tenant 后重新签发
 // （见 internal/api/auth.go 的 AuthHandler.Refresh）。
+
+// ── MFA 两步登录的「挑战令牌」 ──
+//
+// 密码正确但需要 TOTP 时，不能直接发正式 token（那就等于 MFA 可以被跳过），
+// 也不能只返回一个用户 id（无状态接口里客户端可随意伪造 userID 去撞验证码）。
+// 做法是签一个**只能用于本次验证**的短期令牌。
+//
+// 关键设计：用**派生密钥**签名，而不是主密钥。
+// 这样 `ValidateToken`（AuthMiddleware 用的那个）天然无法通过 —— 签名不同，
+// 攻击者拿挑战令牌去访问业务接口会得到 "invalid token"，
+// 而不是依赖某处记得去检查 "这是挑战令牌不是正式令牌"。
+// 靠显式检查标志位来隔离，漏一处就是完整的认证绕过；靠密钥隔离则是结构性的。
+const mfaChallengeTTL = 5 * time.Minute
+
+// MFAChallengeTTLSeconds 导出挑战令牌有效期（秒），供 API 层在响应里告知客户端。
+// 不在 api 包另写一个常量：两处各写一个 300 会在调整有效期时发生漂移，
+// 而漂移的表现是"前端以为还有 5 分钟、实际 2 分钟就过期了"，很难排查。
+func MFAChallengeTTLSeconds() int {
+	return int(mfaChallengeTTL / time.Second)
+}
+
+// mfaChallengeKey 由主密钥派生，与正式令牌的签名密钥不同。
+func (a *Authenticator) mfaChallengeKey() []byte {
+	sum := sha256.Sum256(append(append([]byte{}, a.secret...), []byte("|mfa-challenge|v1")...))
+	return sum[:]
+}
+
+// GenerateMFAChallengeToken 签发"待二次验证"令牌。
+// 只能配合 ValidateMFAChallengeToken 使用，无法通过 ValidateToken。
+func (a *Authenticator) GenerateMFAChallengeToken(userID string) (string, error) {
+	now := time.Now()
+	claims := &Claims{
+		UserID: userID,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(now.Add(mfaChallengeTTL)),
+			IssuedAt:  jwt.NewNumericDate(now),
+			NotBefore: jwt.NewNumericDate(now),
+			Issuer:    "chiron-mfa",
+			Subject:   "mfa-challenge", // 双保险：即便密钥被混用，Claim 也不匹配
+			ID:        generateID(),
+		},
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString(a.mfaChallengeKey())
+}
+
+// ValidateMFAChallengeToken 校验挑战令牌，返回其携带的 userID。
+func (a *Authenticator) ValidateMFAChallengeToken(tokenStr string) (string, error) {
+	token, err := jwt.ParseWithClaims(tokenStr, &Claims{}, func(t *jwt.Token) (interface{}, error) {
+		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
+		}
+		return a.mfaChallengeKey(), nil
+	})
+	if err != nil {
+		return "", fmt.Errorf("mfa challenge validation failed")
+	}
+	claims, ok := token.Claims.(*Claims)
+	if !ok || !token.Valid || claims.Subject != "mfa-challenge" || claims.UserID == "" {
+		return "", fmt.Errorf("invalid mfa challenge")
+	}
+	return claims.UserID, nil
+}
 
 type contextKey string
 

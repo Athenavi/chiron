@@ -6,6 +6,13 @@ vi.mock('../../api/auth', async (importOriginal) => {
   return {
     ...actual,
     listPublicSsoProviders: vi.fn(),
+    // ssoLoginURL 包一层 mock：组件里是 `window.location.href = ssoLoginURL(...)`，
+    // 而 jsdom 的 location 在部分 pool（如 vmThreads）下**不可重写** ——
+    // 原先靠 Object.defineProperty 替换 window.location 会直接 TypeError
+    // （且那段 fallback 写在抛错语句之后，永远执行不到）。
+    // 改为拦截 URL 构造入口，既能验证"点击真的走到了跳转逻辑"，
+    // 又不依赖 jsdom 内部实现；返回值仍是真实实现，纯函数语义不变。
+    ssoLoginURL: vi.fn(actual.ssoLoginURL),
   }
 })
 
@@ -86,24 +93,17 @@ describe('SsoLoginButtons', () => {
 
   it('点击 provider 整页跳转 SSO 登录地址', async () => {
     vi.mocked(listPublicSsoProviders).mockResolvedValue([makeProvider({ id: 'gh-1' })])
-    const hrefSetter = vi.fn()
-    Object.defineProperty(window, 'location', {
-      value: { href: '' },
-      writable: true,
-      configurable: true,
-    })
-    const hrefDesc = Object.getOwnPropertyDescriptor(window, 'location')
-    if (hrefDesc?.get || hrefDesc?.set) {
-      // jsdom 某些版本 location 不可重写，退回 spy 校验调用点
-      hrefSetter.mockImplementation(() => {})
-    }
+    vi.mocked(ssoLoginURL).mockClear()
 
     const wrapper = mount(SsoLoginButtons)
     await flushPromises()
     await wrapper.find('.sso-btn').trigger('click')
 
-    // 校验跳转目标包含 provider id（bind 模式附加 query）
-    expect(ssoLoginURL('gh-1')).toContain('/v1/auth/sso/login/gh-1')
+    // 断言"点击真的走到了跳转逻辑"：组件用 `window.location.href = ssoLoginURL(id)`，
+    // 两者之间只有这一处调用点，所以"被以 gh-1 调用过"等价于"跳转目标正确"。
+    // 不再尝试替换 window.location —— 那在 vmThreads 下会直接 TypeError。
+    expect(ssoLoginURL).toHaveBeenCalledWith('gh-1', undefined)
+    expect(vi.mocked(ssoLoginURL).mock.results[0]!.value).toContain('/v1/auth/sso/login/gh-1')
   })
 
   it('bind 模式跳转地址带 ?mode=bind', async () => {

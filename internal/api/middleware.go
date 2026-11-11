@@ -263,6 +263,10 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 					status:     rw.status,
 				}:
 				default:
+					// 队列满 = 我们自己来不及消化（背压），与 Redis 写入失败是两回事，
+					// 因此单独计数（audit_log_dropped）。只打 Warn 的话，线上
+					// "审计静默变少"没有任何信号可查 —— 这条日志会淹没在请求日志里。
+					monitor.Global.AuditLogDropped.Add(1)
 					slog.Warn("audit log channel full, dropping entry",
 						"path", r.URL.Path, "method", r.Method)
 				}

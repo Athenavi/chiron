@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -37,16 +38,45 @@ var (
 // Store 为 system_settings 表提供带加密的读写。
 type Store struct {
 	pool *pgxpool.Pool
-	aead cipher.AEAD // 由 APP_SECRET 派生；nil 表示未初始化加密（仅允许非敏感存取）
+	// aead 是**当前**主密钥派生的 AEAD，用于加密新数据。
+	// nil 表示未初始化加密（仅允许非敏感存取）。
+	aead cipher.AEAD
+	// legacyAEADs 是历史主密钥派生的 AEAD，**只用于解密**。
+	//
+	// 为什么需要：密文与主密钥强绑定，运维轮换 APP_SECRET（密钥疑似泄露、
+	// 例行轮换、合规要求）后，库里所有已加密值（LLM provider key、支付私钥、
+	// S3 凭证…）会**永久不可解** —— 没有这个列表，轮换就等于数据丢失，
+	// 而且要到用户下次读取配置时才暴露。
+	//
+	// 顺序有意义：按"越新越靠前"尝试，让大多数解密第一次就命中。
+	legacyAEADs []cipher.AEAD
 }
 
 // New 创建 Store。appSecret 为空时返回一个仅支持非敏感存取的 Store（敏感键写入会报错）。
+//
+// 保持这个签名不变：现有 8 处调用点（main.go / gateway_router / llm_keys /
+// engine_config / admin_extras 等）都传 (pool, cfg.AppSecret)，加参数会逼它们
+// 一起改，而它们当中大多数不关心轮换。
 func New(pool *pgxpool.Pool, appSecret string) *Store {
-	return &Store{
-		pool: pool,
-		aead: newAEAD(appSecret),
+	s := &Store{pool: pool}
+	s.aead = newAEAD(appSecret)
+	// 历史密钥从环境读取（逗号分隔，越新越靠前）。用环境变量而非配置结构体：
+	// 轮换是**部署动作**，密钥本身不该进配置文件或代码。
+	if legacy := os.Getenv(envAppSecretPrevious); legacy != "" {
+		for _, prev := range strings.Split(legacy, ",") {
+			if prev = strings.TrimSpace(prev); prev == "" {
+				continue
+			}
+			if a := newAEAD(prev); a != nil {
+				s.legacyAEADs = append(s.legacyAEADs, a)
+			}
+		}
 	}
+	return s
 }
+
+// envAppSecretPrevious 是轮换期的历史主密钥列表（逗号分隔，越新越靠前）。
+const envAppSecretPrevious = "APP_SECRET_PREVIOUS"
 
 
 // nullableUser 将空 userID 转为 NULL，避免 uuid 列绑定空字符串报错。
@@ -89,8 +119,15 @@ func (s *Store) EncryptString(plain string) (string, error) {
 }
 
 // DecryptString 解密 settings.EncryptString 产生的密文。
+//
+// 密钥轮换（APP_SECRET_PREVIOUS）时按「当前密钥 → 历史密钥（越新越靠前）」
+// 依次尝试。密文格式不变（仍是 `v1:`），所以既有的跨语言锚点测试、
+// Python 侧实现都不受影响 —— 轮换只改变"用哪把钥匙试"，不改格式。
+//
+// 只有全部密钥都失败才返回错误。这一点很重要：轮换期如果把"当前密钥解不开"
+// 直接当失败，那么在完成重新加密之前，所有历史密文都会读不出来。
 func (s *Store) DecryptString(enc string) (string, error) {
-	if s.aead == nil {
+	if s.aead == nil && len(s.legacyAEADs) == 0 {
 		return "", ErrEncryptedKeyNotFound
 	}
 	raw, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(enc, cipherVersion))
@@ -101,11 +138,31 @@ func (s *Store) DecryptString(enc string) (string, error) {
 		return "", errors.New("invalid ciphertext")
 	}
 	nonce, sealed := raw[:nonceSize], raw[nonceSize:]
-	plain, err := s.aead.Open(nil, nonce, sealed, nil)
-	if err != nil {
-		return "", err
+
+	// 依次尝试：当前密钥优先（新写入的数据一次命中），再回退历史密钥。
+	candidates := s.decryptKeys()
+	for i, aead := range candidates {
+		plain, openErr := aead.Open(nil, nonce, sealed, nil)
+		if openErr == nil {
+			// 命中的是历史密钥：说明这条数据还没重新加密。
+			// 用 Debug 级别 —— 轮换期这是预期状态，不该刷 Warn 告警。
+			if i > 0 {
+				slog.Debug("settings decrypted with legacy key (rotation pending)")
+			}
+			return string(plain), nil
+		}
 	}
-	return string(plain), nil
+	return "", errors.New("decrypt failed with all available keys")
+}
+
+// decryptKeys 返回按优先级排列的解密候选（当前密钥在前）。
+func (s *Store) decryptKeys() []cipher.AEAD {
+	out := make([]cipher.AEAD, 0, 1+len(s.legacyAEADs))
+	if s.aead != nil {
+		out = append(out, s.aead)
+	}
+	out = append(out, s.legacyAEADs...)
+	return out
 }
 
 // IsSensitive 判断某个配置键是否为敏感值（需加密入库）。

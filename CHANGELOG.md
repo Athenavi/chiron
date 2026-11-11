@@ -76,7 +76,12 @@
   从结构上消掉）；`threads_idem` 与投递表主键两层幂等让多副本重投只落一行，且 `DO NOTHING`
   **不复活**已 `dropped` 的行；超限时落 `dropped` 行并写审计，而不是只写审计 —— 缺行就
   分不清"没发生"和"发生了但被丢"。真库验收 3 条：重投幂等 / 超限丢弃不复活 / 未注册来源报错。
-  **尚未接线**：事件入口仍走 `agent_followup.go` 直投，投递层默认不生效。
+  **已接线**：事件入口 `agent_followup.go` 先 `enqueueThreadDelivery` 入队，再按决策走
+  「立即起跑 / duplicate / 队列满丢弃」三条分支；抢到运行锁时用
+  `startThreadTurnWithLock` 起跑，未跑起来（信号量满/租户并发满/余额不足/配额耗尽）
+  时事件**留在队里**返回 `queued`，由 `thread_turn.go` 与 `routes_agent.go` 的收尾
+  钩子 `drainNextThreadDelivery` 续接。此前这段写的是「尚未接线」，是记录过期，
+  不是代码缺失 —— 排查时请以实现为准，别按这句去重做接线。
 - **`thread_deliveries.payload`（P1-1 接线先决）**：`migrations/versions/0022_thread_delivery_payload.py`
   给投递表加 `payload jsonb NOT NULL DEFAULT '{}'`。起因是核实接线前提时发现两表都存不下
   正文要素：`buildSubagentFollowupContent` 要 `RunID/Status/Profile/Summary`、

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -317,7 +316,15 @@ func str(v interface{}) string {
 }
 
 // validateWebhookURL SSRF 防护：仅 http/https，禁止私网/回环/链路本地/未指定地址。
-// 注：DNS 解析一次，极端 rebinding 场景建议配合出口网络白名单（部署层）。
+//
+// ⚠ 这层校验**不是**唯一防线，也不能单独成立：它在投递前跑一次，而 client 真正
+// 拨号时会再解析一次 DNS —— 两次解析之间的窗口正是 DNS rebinding 的入口。
+// 真正的硬防线在 httpClient 的 Transport.DialContext（见 helpers.go 的
+// newGuardedTransport）：解析一次、校验这份结果、用这份结果直接拨号。
+//
+// 保留本函数的价值在于「早拒绝」：订阅配置非法时立刻打日志并跳过该订阅，
+// 而不是等到投递阶段才失败并消耗一次重试预算。判定规则与拨号期守卫共用
+// isBlockedOutboundIP，避免两套规则各自演化（例如一处忘了拦 IPv4-mapped 地址）。
 func validateWebhookURL(raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil {
@@ -330,14 +337,13 @@ func validateWebhookURL(raw string) error {
 	if host == "" {
 		return fmt.Errorf("empty host")
 	}
-	ips, err := net.LookupIP(host)
-	if err != nil {
-		return fmt.Errorf("dns lookup: %w", err)
-	}
-	for _, ip := range ips {
-		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
-			return fmt.Errorf("target address not allowed: %s", ip)
-		}
+	// 显式超时：本函数在投递循环里同步调用，若某个订阅的域名解析挂住，
+	// 会把该租户整批 webhook 一起拖住。拨号期守卫有 client Timeout 兜底，
+	// 但这里是独立的一次解析，必须自带上限。
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := resolveOutboundIPs(ctx, host); err != nil {
+		return err
 	}
 	return nil
 }

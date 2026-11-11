@@ -6,12 +6,15 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/athenavi/chiron/internal/auth"
+	"github.com/athenavi/chiron/internal/broadcast"
 	"github.com/athenavi/chiron/internal/db"
 	"github.com/athenavi/chiron/internal/session"
 )
@@ -614,5 +617,169 @@ func TestLiveScheduleSkipIsVisibleAsSkippedBusy(t *testing.T) {
 	}
 	if got != "skipped_busy" {
 		t.Fatalf("配置页应显示 skipped_busy（区分\"没跑\"与\"跑失败\"），得到 %q", got)
+	}
+}
+
+// 验收 2：同一拍里用户赢 —— 用户正在该会话跑回合时，定时接管必须让路。
+//
+// 这是整个接管功能最关键的"人的优先级"保证：定时任务的价值在于到点尝试推进，
+// 而不是在用户毫不知情时把他的会话抢过去。`driveOne` 的顺序是
+// 抢租约 → 抢会话锁 → 重读状态，其中第二步失败就 `markSkippedBusy` 并返回。
+//
+// 四条断言缺一不可：
+//  1. `last_status = 'skipped_busy'` —— 用户能看出"这一拍是被占用跳过的"，
+//     而不是"跑失败了"（验收 10 的可区分性要求）；
+//  2. `status` 仍是 `active` —— 让路不等于终结，下个节拍还要继续尝试；
+//  3. `rounds` 仍为 0 —— 让路的一拍**不能消耗** `max_rounds`，否则窗口会在
+//     什么都没跑的情况下被额度耗光（这正是 claimTick 刻意不自增 rounds 的理由）；
+//  4. 用户自己的锁仍归他 —— 接管既没抢走也没顺手释放它。只验前三项的话，
+//     一个"抢了又还"的实现也能蒙混过关，而那已经打断过用户的回合了。
+func TestLiveUserTurnWinsSameTick(t *testing.T) {
+	pool := withP12Pool(t)
+	withLiveRedis(t)
+	tenantID, userID := liveSmokeFixture(t, pool)
+	p12Cleanup(t, pool, userID)
+
+	ctx := context.Background()
+	sid := p12Session(t, pool, tenantID, userID)
+	takeoverID := p12Takeover(t, pool, tenantID, userID, sid, 0)
+
+	// 用户此刻正在该会话里跑回合：锁由用户的 runToken 持有。
+	userRelease, ok, err := AcquireSessionRunLock(ctx, sid, "user-turn-token")
+	if err != nil {
+		t.Fatalf("为用户回合抢会话锁失败: %v", err)
+	}
+	if !ok {
+		t.Fatal("会话锁未被占用，前提不成立")
+	}
+	defer userRelease()
+
+	// 零值 driver 足够：让路分支只写 DB（markSkippedBusy + releaseLease），
+	// 不需要 submit/sessionMgr/信号量 —— 走到它们说明测试前提已经不成立了。
+	d := &takeoverDriver{}
+	d.driveOne(ctx, takeoverID, sid, userID, tenantID)
+
+	var status string
+	var rounds int
+	var lastStatus *string
+	if err := pool.QueryRow(ctx,
+		`SELECT status, rounds, last_status FROM superagent_takeovers WHERE id = $1`,
+		takeoverID).Scan(&status, &rounds, &lastStatus); err != nil {
+		t.Fatalf("读回接管行失败: %v", err)
+	}
+
+	if lastStatus == nil || *lastStatus != "skipped_busy" {
+		t.Fatalf("让路的一拍应记 skipped_busy，得到 %v", lastStatus)
+	}
+	if status != "active" {
+		t.Fatalf("让路不该终结接管，status 应仍为 active，得到 %q", status)
+	}
+	if rounds != 0 {
+		t.Fatalf("让路的一拍消耗了轮数（rounds=%d），max_rounds 会在没跑成的情况下被耗光", rounds)
+	}
+
+	// 用户的锁必须还在他手上。
+	//
+	// ⚠ 这里**不能**用 RefreshSessionRunLock 判断：它的 "renewed" 语义是
+	// 「续期成功（**含夺回已消失的锁**）」，锁若被接管释放掉，再用同一 token
+	// 续期同样返回 renewed —— 那会把"被抢走又夺回"误读成"从未丢过"。
+	// 要区分这两者，只能让**另一个 token** 来抢：抢得到就说明锁已经不在用户手里了。
+	if _, stolen, err := AcquireSessionRunLock(ctx, sid, "intruder-token"); err != nil {
+		t.Fatalf("用第三方 token 抢锁失败: %v", err)
+	} else if stolen {
+		t.Fatal("用户的会话锁已不在他手上：接管让路时不该释放/抢走它")
+	}
+
+	// 反向核实：用户自己仍能续期（说明锁条目还在、token 也确实是他的）。
+	state, err := RefreshSessionRunLock(ctx, sid, "user-turn-token")
+	if err != nil {
+		t.Fatalf("续期用户锁失败: %v", err)
+	}
+	if state != "renewed" {
+		t.Fatalf("用户无法续期自己的锁（state=%q）", state)
+	}
+}
+
+// 验收 3：多副本同时到期收口时，「打断」只发生一次。
+//
+// 为什么这条必须有两个副本才测得出来：单副本无论怎么写都只跑一遍，
+// 而真实故障是**两台副本的扫描周期恰好撞在一起**。若无条件更新（或先查后改），
+// 两边都会认为自己收口了这批行，于是同一个会话会被取消两次、前端收到两条
+// takeover_ended —— 遮罩闪烁、审计里出现两条"已结束"，而排查时看不出是并发。
+//
+// 防线在 `expire` 的那一条 SQL 里：`WHERE status = 'active' AND ends_at <= now()`
+// 让第二次 UPDATE 匹配不到任何行（PG 的行锁把并发串行化），RETURNING 因此
+// 只对胜出的那一方返回行。断言"事件恰好一次"就是在断言这条条件真的生效。
+func TestLiveExpireInterruptsOnlyOnceAcrossReplicas(t *testing.T) {
+	pool := withP12Pool(t)
+	withLiveRedis(t)
+	tenantID, userID := liveSmokeFixture(t, pool)
+	p12Cleanup(t, pool, userID)
+
+	ctx := context.Background()
+	sid := p12Session(t, pool, tenantID, userID)
+
+	// 造一条**已经到期**的接管行：ends_at 在过去 10 分钟。
+	takeoverID := uuid.NewString()
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO superagent_takeovers
+		        (id, tenant_id, user_id, session_id, status, started_at, ends_at, tick_seconds)
+		VALUES ($1, $2, $3, $4, 'active',
+		        now() - interval '20 minutes', now() - interval '10 minutes', 180)`,
+		takeoverID, tenantID, userID, sid); err != nil {
+		t.Fatalf("插入到期接管行失败: %v", err)
+	}
+
+	// localOnly hub（rdb=nil）：只验本地派发次数，不涉及跨实例 pub/sub。
+	hub := broadcast.NewHub(nil)
+	defer hub.Close()
+	events := hub.Subscribe("p12-expire-sub")
+
+	// 两个独立的 driver 实例 = 两台副本。sessionMgr 留 nil：让路/收口路径
+	// 用不到它（cancelSessionRun 对 nil 有显式判空），避免把无关依赖拖进来。
+	d1, d2 := &takeoverDriver{hub: hub}, &takeoverDriver{hub: hub}
+
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for _, d := range []*takeoverDriver{d1, d2} {
+		wg.Add(1)
+		go func(d *takeoverDriver) {
+			defer wg.Done()
+			<-start // 卡在同一起跑线上，尽量逼近真实并发
+			d.expire(ctx)
+		}(d)
+	}
+	close(start)
+	wg.Wait()
+
+	// Hub 是异步投递（队列 + worker），用静默期判定"投递完毕"。
+	ended := 0
+	deadline := time.After(5 * time.Second)
+collect:
+	for {
+		select {
+		case ev := <-events:
+			if ev.Type == eventTakeoverEnded {
+				ended++
+			}
+		case <-time.After(500 * time.Millisecond):
+			break collect
+		case <-deadline:
+			break collect
+		}
+	}
+
+	if ended != 1 {
+		t.Fatalf("接管结束事件应恰好 1 次，实际 %d 次：条件更新没挡住第二个副本", ended)
+	}
+
+	var status, reason string
+	if err := pool.QueryRow(ctx,
+		`SELECT status, COALESCE(stop_reason, '') FROM superagent_takeovers WHERE id = $1`,
+		takeoverID).Scan(&status, &reason); err != nil {
+		t.Fatalf("读回接管行失败: %v", err)
+	}
+	if status != "expired" || reason != "expired" {
+		t.Fatalf("到期收口应写 status=expired/stop_reason=expired，得到 %q/%q", status, reason)
 	}
 }

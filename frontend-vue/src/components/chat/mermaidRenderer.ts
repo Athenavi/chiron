@@ -14,7 +14,18 @@ import { t } from '../../i18n'
 
 export interface MermaidAdapter {
   initialize(options: Record<string, unknown>): void
-  render(id: string, code: string): Promise<{ svg: string }>
+  /**
+   * `bindFunctions` 是 mermaid 渲染结果的**可选**一部分：图内的点击/悬浮等交互
+   * 全靠它挂事件监听。官方文档（mermaid/dist/types.d.ts 的 RenderResult）明确要求
+   * **在 svg 插入 DOM 之后**再调用，否则拿不到节点。
+   *
+   * 此前这里只声明 `{ svg }`，于是 bindFunctions 被静默丢弃 —— 图能画出来，
+   * 但所有节点交互都点不动，而失败方式完全不报错（只是"没反应"）。
+   */
+  render(
+    id: string,
+    code: string,
+  ): Promise<{ svg: string; bindFunctions?: (element: Element) => void }>
 }
 
 export interface RenderOptions {
@@ -98,7 +109,7 @@ export async function renderMermaidBlocks(host: HTMLElement, options: RenderOpti
     const code = slot.dataset.code ? decodeURIComponent(slot.dataset.code) : slot.textContent || ''
     slot.dataset.rendered = '1'
     try {
-      const { svg } = await mermaid.render(`mmd-${++seq}`, code)
+      const { svg, bindFunctions } = await mermaid.render(`mmd-${++seq}`, code)
       // 二次消毒后再写入（见 sanitizeSvg）；消毒失败则退回源码展示。
       const safe = sanitizeSvg(svg)
       if (!safe) {
@@ -108,6 +119,20 @@ export async function renderMermaidBlocks(host: HTMLElement, options: RenderOpti
       }
       slot.innerHTML = safe
       slot.classList.add('mermaid-diagram')
+      // bindFunctions 必须在 **svg 插入 DOM 之后**调用（mermaid 官方文档的原话是
+      // "necessary for adding event listeners to the elements in the svg"）：它按
+      // id / class 在传入的容器里查节点再挂监听，提前调用会因为节点还不在文档里而挂空。
+      //
+      // 单独 try 包住、且**不影响**图表展示：图已经画出来了，交互挂不上只是少个点击，
+      // 不该把它降级成"语法错误"盖住内容。这也是原来丢弃它的代价 —— 静默失败，
+      // 用户只会觉得"点不动"，没有任何信号。
+      if (bindFunctions) {
+        try {
+          bindFunctions(slot)
+        } catch (err) {
+          console.warn('mermaid: bindFunctions failed, diagram interactions unavailable', err)
+        }
+      }
     } catch {
       slot.classList.add('mermaid-error')
       slot.dataset.error = t('errors.chart_syntax_error_showing_source')

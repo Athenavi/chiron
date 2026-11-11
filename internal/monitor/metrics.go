@@ -88,6 +88,11 @@ type Metrics struct {
 	QuotaExceeded      atomic.Int64
 	AuditLogWrites     atomic.Int64
 	AuditLogErrors     atomic.Int64
+	// AuditLogDropped 是内存队列满时的丢弃次数（middleware 的非阻塞入队失败）。
+	// 与 AuditLogErrors 分开计数：前者是**我们自己**来不及消化（背压），
+	// 后者是 Redis 写入失败（依赖故障）。两者的处置完全不同 —— 队列满要调
+	// worker 数/缓冲深度，Redis 失败要查依赖，混在一个数里就分不出来。
+	AuditLogDropped    atomic.Int64
 	WebSocketConns     atomic.Int64
 	PaymentAttempts    atomic.Int64
 	PaymentSuccesses   atomic.Int64
@@ -199,6 +204,7 @@ func Snapshot() map[string]interface{} {
 		"quota_exceeded":      Global.QuotaExceeded.Load(),
 		"audit_log_writes":    Global.AuditLogWrites.Load(),
 		"audit_log_errors":    Global.AuditLogErrors.Load(),
+		"audit_log_dropped":   Global.AuditLogDropped.Load(),
 		"websocket_conns":     Global.WebSocketConns.Load(),
 		"payment_attempts":    Global.PaymentAttempts.Load(),
 		"payment_successes":   Global.PaymentSuccesses.Load(),
