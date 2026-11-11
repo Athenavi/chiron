@@ -9,9 +9,7 @@
 
 from __future__ import annotations
 
-from typing import Any, TypeVar
-
-T = TypeVar("T")
+from typing import Any
 
 
 def _as_str_list(raw: Any) -> list[str]:
@@ -44,7 +42,7 @@ def context_ids(workbench_context: Any, name: str) -> list[str]:
     return _as_str_list(ctx.get(f"{name}_id"))
 
 
-def merge_by_quota(groups: list[list[T]], limit: int) -> list[T]:
+def merge_by_quota[T](groups: list[list[T]], limit: int) -> list[T]:
     """多来源检索结果的轮询配额合并。
 
     多选知识库的意图是"这几个库都要用"，所以每轮从各来源取一条（保证每个来源都有

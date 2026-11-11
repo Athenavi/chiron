@@ -5,7 +5,7 @@
 # 8 处历史问题（未用变量、未用导入、裸 `except`、以及该有的 `noqa` 说明）。
 # 规则集与引擎保持一致，避免"两个 Python 子项目两套标准"。
 line-length = 120
-target-version = "py311"
+target-version = "py314"
 
 [lint]
 select = ["E", "F", "W", "I", "N", "UP", "B"]

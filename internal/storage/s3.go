@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -209,6 +210,43 @@ func (s *S3Store) stripPrefix(key string) string {
 		return key[len(expected):]
 	}
 	return key
+}
+
+// ObjectKeyFromURL 把 ObjectURL 生成的公开 URL 反解回**调用方视角**的对象键
+// （即已去掉 store prefix，可直接喂给 OpenStream/Read/Delete）。
+//
+// 存在意义：调用方拿到的是 file_url 字符串，而校验/读取需要的是对象键。
+// 若在 API 层自己拼 "endpoint/bucket/" 前缀，就等于把 S3Store 的内部布局
+// 复制一份出去 —— 换 bucket、加 prefix 时两处会静默漂移，且校验会被绕过。
+//
+// 只有当 scheme 与 host 都与本 store 完全一致、且路径确实落在本 bucket 下时才返回 true；
+// 其余一律 false（调用方应据此拒绝，而不是退化成「跳过校验」）。
+func (s *S3Store) ObjectKeyFromURL(rawURL string) (string, bool) {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return "", false
+	}
+	base, err := url.Parse(s.ObjectURL(""))
+	if err != nil {
+		return "", false
+	}
+	if u.Scheme != base.Scheme || u.Host != base.Host {
+		return "", false
+	}
+	key := strings.TrimPrefix(u.Path, "/")
+	bucketPrefix := s.bucket + "/"
+	if !strings.HasPrefix(key, bucketPrefix) {
+		return "", false
+	}
+	key = strings.TrimPrefix(key, bucketPrefix)
+	// 对象键里可能出现 %XX（中文文件名）；先解码再交给存储层。
+	if unescaped, uerr := url.PathUnescape(key); uerr == nil {
+		key = unescaped
+	}
+	if key == "" || strings.Contains(key, "..") {
+		return "", false
+	}
+	return s.stripPrefix(key), true
 }
 
 func detectContentType(path string) string {

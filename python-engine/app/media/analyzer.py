@@ -126,9 +126,9 @@ def _document_metadata(data: bytes, media_url: str) -> dict[str, Any]:
     """文档元数据：PDF（pymupdf）/ docx（python-docx）/ 纯文本。"""
     lowered = media_url.lower()
     if lowered.endswith(".pdf") or data[:4] == b"%PDF":
-        import fitz  # pymupdf
+        import pymupdf
 
-        with fitz.open(stream=data, filetype="pdf") as doc:
+        with pymupdf.open(stream=data, filetype="pdf") as doc:
             return {
                 "format": "pdf",
                 "pages": doc.page_count,

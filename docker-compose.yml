@@ -173,6 +173,16 @@ services:
     # gateway 自己也要在这段时间里把 SSE 长连接收干净。
     stop_grace_period: 60s
     restart: unless-stopped
+    # ── 容器加固：与 python-engine / frontend / sandbox-* 同口径 ──
+    # 此前 gateway 是唯一没有 security_opt/cap_drop 的核心服务：它以非 root 的
+    # appuser(1001) 运行、监听 8080 非特权端口，本就不需要任何 capability。
+    # 网关是唯一同时持有 DB 凭据、JWT 密钥、对象存储密钥的进程（横向移动价值最高），
+    # 更应禁止提权与能力放大。
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 512
     # 加入 internal 沙箱网络：sandbox-service 需要把执行审计 POST 到
     # `/v1/internal/audit/exec`，而它自己只在 internal 网络上（无外网出口），
     # 因此必须由网关侧提供可达性。网关本身仍经 default 网络访问外网。
@@ -449,7 +459,10 @@ services:
   # sandbox-service 的内部负载均衡。引擎侧只有一个 URL，而 Docker DNS 的 round-robin
   # 会被 HTTP keep-alive 抵消（连接一旦建立就复用）—— 见 deploy/nginx/sandbox.conf 的说明。
   sandbox-lb:
-    image: nginx:1.27-alpine   # upstream 的 `resolve` 参数需要 ≥ 1.27.3
+    # 与 frontend-vue/Dockerfile 的 `FROM nginx:alpine` 保持同一口径（此前这里写死
+    # 1.27-alpine、Dockerfile 用浮动 alpine，两处版本各走各的，安全补丁覆盖范围不同）。
+    # upstream 的 `resolve` 参数需要 nginx ≥ 1.27.3，alpine 当前主线远高于此。
+    image: nginx:alpine
     logging: *default-logging
     cpus: 0.5
     mem_limit: 128m
@@ -584,6 +597,14 @@ services:
       - default
     expose:
       - "8100"
+    # 容器加固：与 gateway / python-engine / frontend 同口径。镜像以 pi(1000) 运行、
+    # 监听 8100 非特权端口，不需要任何 capability；它解析用户上传的文档（PDF 渲染），
+    # 是攻击面较靠前的一层。
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 512
 
   # ── 索引 worker（消费 engine:tasks:kb；与检索服务同镜像）──────────────
   pageindex-worker:
@@ -623,6 +644,12 @@ services:
       - kblobdata:/srv/chiron/knowledge
     networks:
       - default
+    # 容器加固：worker 与检索服务同镜像、同攻击面（解析用户文档），口径保持一致。
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 512
 
   frontend:
     build:

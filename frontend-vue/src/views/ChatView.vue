@@ -2372,7 +2372,7 @@ function onSSEMessage(raw: unknown, sid: string) {
     //
     // 归属用显式传入的 `sid`，**不是** `activeSessionId`：SSE 在用户切走之后仍会继续
     // 送达（多会话并行），用当前视图的会话会把 A 的清单写到 B 的面板上。
-    let todos: unknown = []
+    let todos: unknown
     try {
       todos = JSON.parse(String(d.content ?? evt.content ?? '[]'))
     } catch { todos = [] }
@@ -2424,7 +2424,7 @@ function onSSEMessage(raw: unknown, sid: string) {
   } else if (type === 'compaction') {
     // 引擎的自动压缩事件（runtime.py 的 _compact_with_notice）：把"上下文悄悄变短"
     // 变成用户可见的状态栏提示（问题 4）。
-    let info: { saved_tokens?: unknown; before_tokens?: unknown; after_tokens?: unknown } = {}
+    let info: { saved_tokens?: unknown; before_tokens?: unknown; after_tokens?: unknown }
     try { info = JSON.parse(String(d.content ?? evt.content ?? '{}')) } catch { info = {} }
     if (info?.saved_tokens) {
       lastCompaction.value = {

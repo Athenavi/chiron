@@ -423,7 +423,7 @@ const CODE_COLLAPSE_LINES = 28
 // P 性能：图片懒加载（长列表/历史中大量图片不阻塞首屏，滚动到才加载）
 md.renderer.rules.image = (tokens, idx) => {
   const token = tokens[idx]
-  const src = md.utils.escapeHtml(token.attrGet('src') || '')
+  const src = md.utils.escapeHtml(String(token.attrGet('src') ?? ''))
   const alt = md.utils.escapeHtml(token.content || '')
   return `<img src="${src}" alt="${alt}" loading="lazy" decoding="async" />`
 }

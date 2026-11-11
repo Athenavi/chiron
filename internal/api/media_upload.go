@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -258,17 +259,17 @@ func (h *MediaHandler) CompleteUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 对已通过预签名上传到 S3 的文件进行 MIME 类型检测
-	// （防止客户端绕过 MIME 检查直接上传恶意文件）
-	if body.FileURL != "" {
-		resp, err := http.Head(body.FileURL)
-		if err == nil {
-			contentType := resp.Header.Get("Content-Type")
-			if isExecutableMIME(contentType, body.Name) {
-				BadRequest(w, "file type not allowed")
-				return
-			}
-		}
+	// 用存储后端读取对象头部做 magic bytes 判定（与直传路径同一份口径）。
+	//
+	// 旧实现是 `http.Head(body.FileURL)`，三个问题：
+	//   ① 生产对象桶几乎都是私有的，匿名 HEAD 拿到 403，Content-Type 是 S3 的 XML
+	//      错误体 —— isExecutableMIME 永远不命中，校验在真实部署里**等于没有**（fail-open）；
+	//   ② 用的是无超时的 http.DefaultClient，且从不关闭 resp.Body —— 连接/fd 泄漏，
+	//      存储后端变慢时网关会持续堆积 goroutine（govulncheck 也在该行报警）；
+	//   ③ 让网关对用户提交的 URL 发出站请求，平白多一个 SSRF 面。
+	if err := h.checkStoredObjectType(r.Context(), body.FileURL, body.Name, body.MimeType); err != nil {
+		BadRequest(w, err.Error())
+		return
 	}
 
 	// 资产 ID 与预签名阶段保持一致：客户端传入的 ID 只有在「合法 UUID」且
@@ -299,6 +300,66 @@ func (h *MediaHandler) CompleteUpload(w http.ResponseWriter, r *http.Request) {
 }
 
 // ── Upload helpers ──
+
+// checkStoredObjectType 从**存储后端**读取对象头部 512 字节，用 magic bytes 判定
+// 真实类型，与直传路径（Upload 里 DetectContentType + isExecutableMIME）同一口径。
+//
+// 为什么不用 HTTP HEAD：见 CompleteUpload 里的注释——私有桶下 HEAD 会 403，
+// 拿到的 Content-Type 是 S3 的错误 XML，校验形同虚设；而且那把无超时的
+// DefaultClient 还会泄漏连接。直接问存储后端既准确又没有出站请求。
+func (h *MediaHandler) checkStoredObjectType(ctx context.Context, fileURL, name, declaredMIME string) error {
+	if h.store == nil {
+		return fmt.Errorf("storage backend unavailable")
+	}
+	inner := h.store
+	if atomic, ok := h.store.(*storage.AtomicStore); ok {
+		inner = atomic.LoadRaw()
+	}
+
+	var objectKey string
+	switch s := inner.(type) {
+	case *storage.S3Store:
+		key, ok := s.ObjectKeyFromURL(fileURL)
+		if !ok {
+			// host/scheme/bucket 对不上就是伪造的 file_url，直接拒（不放行）
+			return fmt.Errorf("file_url does not match configured storage backend")
+		}
+		objectKey = key
+	case *storage.LocalStore:
+		// 本地后端约定 file_url 为 /media/...，相对 STORAGE_ROOT，去掉前导斜杠即对象键
+		objectKey = strings.TrimPrefix(fileURL, "/")
+	default:
+		return fmt.Errorf("unsupported storage backend")
+	}
+
+	rc, err := h.store.OpenStream(ctx, objectKey)
+	if err != nil {
+		// Complete 阶段对象必须已存在；读不到说明客户端跳过了上传，
+		// 继续入库只会产生一条指向空对象的记录 —— 拒绝而非放行。
+		slog.Warn("complete upload: object unreadable for MIME check", "key", objectKey, "error", err)
+		return fmt.Errorf("uploaded object not found")
+	}
+	defer rc.Close()
+
+	head := make([]byte, 512)
+	n, readErr := io.ReadFull(rc, head)
+	if readErr != nil && readErr != io.ErrUnexpectedEOF && readErr != io.EOF {
+		slog.Warn("complete upload: read object head failed", "key", objectKey, "error", readErr)
+		return fmt.Errorf("read uploaded object failed")
+	}
+	head = head[:n]
+
+	detected := truncateMIME(http.DetectContentType(head))
+	if isExecutableMIME(detected, name) {
+		return fmt.Errorf("file type not allowed: %s", detected)
+	}
+	// 客户端声明的类型也过一遍：扩展名兜底能拦下 magic bytes 认不出的 PE/ELF
+	// （DetectContentType 对它们只返回 application/octet-stream）。
+	if declaredMIME != "" && isExecutableMIME(declaredMIME, name) {
+		return fmt.Errorf("file type not allowed: %s", declaredMIME)
+	}
+	return nil
+}
 
 func detectType(mime string) string {
 	if strings.HasPrefix(mime, "image/") {

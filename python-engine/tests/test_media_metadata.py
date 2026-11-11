@@ -30,9 +30,9 @@ def _png_bytes(width: int = 8, height: int = 6) -> bytes:
 
 
 def _pdf_bytes(pages: int = 2) -> bytes:
-    import fitz
+    import pymupdf
 
-    doc = fitz.open()
+    doc = pymupdf.open()
     for _ in range(pages):
         doc.new_page()
     data = doc.tobytes()

@@ -774,7 +774,10 @@ spec:
           type: RuntimeDefault
       containers:
         - name: sandbox-lb
-          image: nginx:1.27-alpine   # upstream 的 `resolve` 参数需要 nginx ≥ 1.27.3
+          # 与 docker-compose.yml 的 sandbox-lb、frontend-vue/Dockerfile 保持同一口径
+          # （此前写死 1.27-alpine，与 Dockerfile 的浮动 alpine 各走各的版本）。
+          # upstream 的 `resolve` 参数需要 nginx ≥ 1.27.3，alpine 主线远高于此。
+          image: nginx:alpine
           ports: [{ containerPort: 8001 }]
           securityContext:
             allowPrivilegeEscalation: false

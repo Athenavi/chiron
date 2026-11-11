@@ -30,7 +30,7 @@ docker compose up -d --scale gateway=2 --scale python-engine=2
 
 ### 路线 B：本地非容器
 
-需要 Go 1.26+、Python 3.11、Node 22、pnpm 10、PostgreSQL、Redis。**一个容易踩的坑**：
+需要 Go 1.26+、Python 3.14、Node 22、pnpm 10、PostgreSQL、Redis。**一个容易踩的坑**：
 
 > 仓库根的 `vendor/` 放的是**本地参考源码**（不随仓库分发、不含 `vendor/modules.txt`），
 > 而 Go 只要看到 `vendor/` 目录就会按 vendor 模式做一致性检查并报 `inconsistent vendoring`。
@@ -45,7 +45,7 @@ docker compose up -d --scale gateway=2 --scale python-engine=2
 | Go | `go.mod` 的 `go` 指令（CI 用 `go-version-file: go.mod`） |
 | Node | `22` |
 | pnpm | `10` |
-| Python | `3.11`（**不要用 3.12+ 本地验收**：`python-engine` 有一处 PEP 701 嵌套引号 f-string，在 3.11 下是 `SyntaxError`，CI 用 3.11 正是为了挡住它） |
+| Python | `3.14`（CI 与运行时镜像均为 3.14；`python-engine/pyproject.toml` 的 `requires-python` 与 ruff/mypy 的 `target-version` 也统一为 3.14） |
 
 ## 3. 提交前必须本地跑过
 
@@ -128,10 +128,10 @@ PostgreSQL/Redis 服务、建 schema、构建并启动网关），本地按下�
 - ⚠ **CI 环境只装 `requirements.txt` + `requirements-dev.txt`，与本机不同** —— 每批接线时留意
   **顶层** import 是否被环境里的第三方包偶然带入（曾查出 `beautifulsoup4` 与 `aiohttp` 从未被声明，
   此前只由 markdownify / aiobotocore 偶然带入）。
-- ⚠ **本机复核环境有已知差异**：隔离 `venv` 只能建在 Python 3.14（`requirements.txt` 的固定版本装不了：
-  `grpcio==1.71.1` 无 wheel、`pydantic==2.11.5` 需 Rust 编译），依赖版本高于 CI 的 3.11 + 固定版本。
-  若某个 step 首次在 CI 上报出本地没有的错误，根因大概率在此；**先按 CI 结果复核**，再决定是补
-  overrides 还是改代码。看到"环境差异"先确认代码是否真的对，别急着加豁免。
+- ⚠ **本机复核环境曾与 CI 有差异**：历史上 CI 用 Python 3.11，而本机隔离 `venv` 只能建在 3.14
+  （旧版固定依赖装不了：`grpcio==1.71.1` 无 wheel、`pydantic==2.11.5` 需 Rust 编译），依赖版本也高于
+  CI。**现已在 Python 3.14 上对齐**（CI、`python-engine/Dockerfile`、`requires-python` 与 ruff/mypy
+  的 `target-version` 一致），这类"环境差异"不再是常见根因；若 CI 红而本地绿，先按 CI 结果复核代码本身。
 
 ### `frontend` — 前端（工作目录 `frontend-vue/`）
 

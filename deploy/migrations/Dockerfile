@@ -16,7 +16,7 @@
 #
 # 只想给 DBA 出 SQL（离线审阅、在受控窗口执行）时改用：
 #   python -m alembic -c alembic.ini upgrade head --sql
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1

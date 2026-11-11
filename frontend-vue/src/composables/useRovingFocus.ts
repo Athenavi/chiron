@@ -49,7 +49,7 @@ export function nextRovingIndex(
   loop = true,
 ): number {
   if (total <= 0) return -1
-  let i = current
+  let i: number
   if (intent === 'first') i = 0
   else if (intent === 'last') i = total - 1
   else if (intent === 'prev') i = current - 1

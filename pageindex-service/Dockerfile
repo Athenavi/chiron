@@ -7,7 +7,7 @@
 # 两个入口（compose 用同一镜像起两个服务）：
 #   检索服务：uvicorn app.search_api:app --host 0.0.0.0 --port 8100
 #   索引 worker：python -m app.index_worker
-FROM python:3.11-slim
+FROM python:3.14-slim
 
 WORKDIR /app
 

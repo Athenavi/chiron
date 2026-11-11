@@ -13,6 +13,7 @@ import (
 	"github.com/athenavi/chiron/internal/auth"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // ── 替身 ──
@@ -52,6 +53,7 @@ func (r *invoiceRows) FieldDescriptions() []pgconn.FieldDescription { return nil
 func (r *invoiceRows) Values() ([]any, error)                       { return nil, nil }
 func (r *invoiceRows) RawValues() [][]byte                          { return nil }
 func (r *invoiceRows) Conn() *pgx.Conn                              { return nil }
+func (r *invoiceRows) TypeMap() *pgtype.Map                         { return nil }
 
 func (r *invoiceRows) Next() bool {
 	if r.idx >= len(r.rows) {

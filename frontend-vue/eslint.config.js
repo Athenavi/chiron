@@ -3,6 +3,7 @@ import js from '@eslint/js'
 import vue from 'eslint-plugin-vue'
 import vueParser from 'vue-eslint-parser'
 import tseslint from 'typescript-eslint'
+import globals from 'globals'
 
 export default [
   // 全局忽略
@@ -15,6 +16,18 @@ export default [
   ...tseslint.configs.recommended,
   // Vue 规则
   ...vue.configs['flat/recommended'],
+  // 浏览器 / ES 全局变量。
+  // no-undef 需要知道 window / document / setTimeout 这类运行时全局量，
+  // 而 flat config 从 ESLint 9 起不再由 eslint-env 注释或插件隐式注入，
+  // 必须显式声明，否则整个 src 会被 398 条误报淹没。
+  {
+    languageOptions: {
+      globals: {
+        ...globals.browser,
+        ...globals.es2021,
+      },
+    },
+  },
   // Vue 文件解析器配置（TypeScript + Vue SFC）
   {
     files: ['**/*.vue'],

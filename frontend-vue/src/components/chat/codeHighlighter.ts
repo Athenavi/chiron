@@ -99,7 +99,7 @@ export async function highlightCodeBlocks(host: HTMLElement): Promise<void> {
   const blocks = host.querySelectorAll<HTMLElement>(PENDING_SELECTOR)
   if (!blocks.length) return
 
-  let hljs: HighlightAdapter | null = null
+  let hljs: HighlightAdapter | null
   try {
     hljs = await loadAdapter()
   } catch {

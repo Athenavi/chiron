@@ -75,7 +75,7 @@ class _FakeMessageStream:
     def __init__(self, captured: dict[str, Any]) -> None:
         self._captured = captured
 
-    async def __aenter__(self) -> "_FakeMessageStream":
+    async def __aenter__(self) -> _FakeMessageStream:
         return self
 
     async def __aexit__(self, *exc: object) -> bool:

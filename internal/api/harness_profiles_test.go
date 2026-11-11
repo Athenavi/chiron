@@ -12,6 +12,7 @@ import (
 	"github.com/athenavi/chiron/internal/auth"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // P1-④ 批 B：租户/用户级 harness 配置端点。
@@ -38,6 +39,7 @@ func (r *fakeRows) Err() error                                   { return nil }
 func (r *fakeRows) CommandTag() pgconn.CommandTag                { return pgconn.CommandTag{} }
 func (r *fakeRows) FieldDescriptions() []pgconn.FieldDescription { return nil }
 func (r *fakeRows) Conn() *pgx.Conn                              { return nil }
+func (r *fakeRows) TypeMap() *pgtype.Map                         { return nil }
 func (r *fakeRows) RawValues() [][]byte                          { return nil }
 func (r *fakeRows) Values() ([]any, error)                       { return r.cur, nil }
 

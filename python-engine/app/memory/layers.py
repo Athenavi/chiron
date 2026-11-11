@@ -432,7 +432,7 @@ def _mul_sum(a: list[float], b: list[float]) -> float:
     `operator.mul` 在类型层面是 `Any`，空向量的 `sum` 又是 int `0` ⇒ 显式收口成 float，
     调用方（相似度阈值比较）拿到的类型与声明一致。
     """
-    return float(sum(map(_mul, a, b)))
+    return float(sum(map(_mul, a, b, strict=True)))
 
 
 def dot_product(a: list[float], b: list[float]) -> float:

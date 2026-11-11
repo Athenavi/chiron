@@ -19,13 +19,11 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
-from typing import Any, TypeVar
+from typing import Any
 
 from app.gateway.key_ring import NoUsableKeyError
 
 logger = logging.getLogger(__name__)
-
-T = TypeVar("T")
 
 #: 一次请求最多换几把 key 的默认值（0 = 关掉整个机制）。
 DEFAULT_KEY_RETRY_MAX = 1
@@ -97,7 +95,7 @@ def _count(provider: str, outcome: str) -> None:
         pass
 
 
-async def call_with_key_retry(
+async def call_with_key_retry[T](
     *,
     provider: str,
     resolve: Callable[[], Awaitable[tuple[Any, Any]]],

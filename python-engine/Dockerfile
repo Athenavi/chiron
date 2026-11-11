@@ -1,11 +1,11 @@
 # Multi-stage build — Python AI Engine v0.1.260825.01
-FROM python:3.11-slim AS base
+FROM python:3.14-slim AS base
 
 WORKDIR /app
 
 # 系统依赖（ffmpeg：video_analyze 抽帧需要；**不引 Python 依赖**，见 app/tools/video.py）
 # 先在基础镜像上应用 Debian 安全更新：Trivy 按镜像里的**实际包版本**判红，
-# 而 python:3.11-slim 的层可能仍带旧 zlib1g（CVE-2026-76844 / CVE-2026-85091，
+# 而 python:3.14-slim 的层可能仍带旧 zlib1g（CVE-2026-76844 / CVE-2026-85091，
 # 修复版本 1:1.3.dfsg+really1.3.1-1+deb13u1）。`apt-get upgrade` 让重建镜像拿到它。
 RUN apt-get update \
     && apt-get -y upgrade \

@@ -183,7 +183,7 @@ function countIn(names: readonly string[], set: Set<string>): number {
 /** 组头摘要：按工具语义分档计数，未识别的进「其它」 */
 export function toolGroupSummary(kind: ToolGroupKind, names: readonly string[]): string {
   const parts: string[] = []
-  let labelled = 0
+  let labelled: number
   if (kind === 'explore') {
     const read = countIn(names, READ_TOOLS)
     const search = countIn(names, SEARCH_TOOLS)
