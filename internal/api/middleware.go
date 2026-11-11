@@ -245,9 +245,16 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 		if r.Method != "GET" && r.Method != "OPTIONS" && rw.status < 500 {
 			claims := auth.GetClaims(r.Context())
 			if claims != nil {
+				// 必须脱离请求的取消链：这里在 handler 返回**之后**才入队，而 Go 的
+				// 请求 context 在 ServeHTTP 返回时立即被取消。若把 r.Context() 交给
+				// worker，等 worker 真正写 Redis 时 ctx 早已 Done，XAdd 必定返回
+				// `context canceled` —— 审计日志会静默地几乎全部丢弃（写失败只打
+				// Warn，不影响响应，所以线上极难察觉）。
+				// 仓库其他旁路发货（cron_scheduler / harness_profiles /
+				// internal_storage_handler）同样用 WithoutCancel，此处此前是漏网。
 				select {
 				case auditLogCh <- auditLogTask{
-					ctx:        r.Context(),
+					ctx:        context.WithoutCancel(r.Context()),
 					userID:     claims.UserID,
 					tenantID:   claims.TenantID,
 					method:     r.Method,

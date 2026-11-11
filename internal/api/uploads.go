@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bufio"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -384,16 +385,30 @@ func (h *UploadHandler) Complete(w http.ResponseWriter, r *http.Request) {
 	}
 	defer stream.Close()
 
+	// P0 分片上传补齐 magic bytes 检测（与直传路径对齐）。
+	//
+	// 此前分片路径只在 Init 阶段校验**客户端声明**的 mime_type：把 .html/.svg
+	// 声明成 image/png 即可绕过全部类型门禁，而直传路径（media_upload.go 的
+	// Upload → DetectContentType + isExecutableMIME）是实测内容的。两条上传
+	// 路径的安全口径必须一致，否则攻击者只需换一条路径。
+	//
+	// 用 Peek 而非 Read：只看不算消费，流仍原样交给 finalize 写目标对象。
+	buffered := bufio.NewReaderSize(stream, 4096)
+	if err := checkStreamType(buffered, up.Name, up.MimeType); err != nil {
+		BadRequest(w, err.Error())
+		return
+	}
+
 	// assetID 仅在 purpose=media 时由 finalizeMedia 返回（其余用途不落 media_assets）
 	var fileURL string
 	var assetID string
 	switch up.Purpose {
 	case "media":
-		assetID, fileURL, err = h.finalizeMedia(r, tenantStr(claims.TenantID), up, stream)
+		assetID, fileURL, err = h.finalizeMedia(r, tenantStr(claims.TenantID), up, buffered)
 	case "kb_doc":
-		fileURL, err = h.finalizeKBDoc(r, tenantStr(claims.TenantID), up, stream)
+		fileURL, err = h.finalizeKBDoc(r, tenantStr(claims.TenantID), up, buffered)
 	default:
-		fileURL, err = h.finalizeGeneric(up, stream)
+		fileURL, err = h.finalizeGeneric(up, buffered)
 	}
 	if err != nil {
 		// 引擎返回的状态码原样透传：4xx（类型不支持/403/404）与 503（知识库服务未配置）
@@ -422,6 +437,29 @@ func (h *UploadHandler) Complete(w http.ResponseWriter, r *http.Request) {
 		"upload_id": uploadID, "file_url": fileURL, "asset_id": assetID,
 		"purpose": up.Purpose, "name": up.Name, "size": up.Size,
 	})
+}
+
+// checkStreamType 用 magic bytes 判定上传流头部的真实类型，供分片上传路径复用，
+// 与直传路径（media_upload.go 的 DetectContentType + isExecutableMIME）同一口径。
+//
+// 入参必须是 *bufio.Reader 且内部只用 Peek：只看不消费，调用方随后把这个
+// reader 原样交给 finalize 写入目标对象，不会丢数据。
+func checkStreamType(br *bufio.Reader, name, declaredMIME string) error {
+	head, err := br.Peek(512)
+	if err != nil && err != io.EOF {
+		return fmt.Errorf("read upload head failed")
+	}
+
+	detected := truncateMIME(http.DetectContentType(head))
+	if isExecutableMIME(detected, name) {
+		return fmt.Errorf("file type not allowed: %s", detected)
+	}
+	// 声明的类型也过一遍：扩展名兜底能拦下 magic bytes 认不出的 PE/ELF
+	// （DetectContentType 对它们只返回 application/octet-stream）。
+	if declaredMIME != "" && isExecutableMIME(declaredMIME, name) {
+		return fmt.Errorf("file type not allowed: %s", declaredMIME)
+	}
+	return nil
 }
 
 // chunkStream 按 index 顺序把存储后端上的分片读流拼接成单个流。

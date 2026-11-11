@@ -85,6 +85,16 @@ data:
   PORT: "8080"
   STORAGE_BACKEND: "local"
   STORAGE_ROOT: "/srv/chiron/workspace"
+  # 限流：三级令牌桶均为「每分钟总量配额」、由 Redis 原子计数承载，
+  # **与副本数无关**（3 副本共享同一个 RATE_LIMIT_GLOBAL，不会变成 3 倍）。
+  RATE_LIMIT_RPM: "100"
+  RATE_LIMIT_GLOBAL: "10000"
+  # 只在「启动时 Redis 就不可用」时生效。本清单 DEGRADED_MODE 未设（=false），
+  # 那种情况会直接拒绝启动，因此它实际是防御性配置；运行期 Redis 故障由
+  # 分布式限流器自身 fail-close 兜底（internal/api/distributed_ratelimit.go）。
+  # 但若有人手工把 DEGRADED_MODE 调成 true 做降级，此开关决定是否退化为
+  # 「配额按副本放大」的进程内限流 —— 多副本下应保持 true。
+  RATE_LIMIT_FAIL_CLOSE: "true"
 ---
 # ⚠ **这里刻意不再内联 Secret 资源。**
 #

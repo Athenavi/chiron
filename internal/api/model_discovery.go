@@ -42,6 +42,26 @@ const (
 var (
 	modelSyncMu   sync.Mutex
 	modelSyncLast = map[string]time.Time{}
+
+	// modelDiscoveryClient 供「列模型」外呼复用。
+	//
+	// 此前这里是每次调用现造一个 `&http.Client{}`：既没有 Timeout，也每次都新建
+	// Transport（连接池无法复用，高频同步时 fd 与 TIME_WAIT 堆积）。虽然有
+	// context.WithTimeout(modelFetchTimeout) 兜底，但没有 Transport 层的
+	// ResponseHeaderTimeout/握手超时，慢速或半开连接仍可能长期占用 goroutine。
+	//
+	// 不复用全局 httpClient：那个带 CheckRedirect=ErrUseLastResponse（为 webhook 的
+	// SSRF 防护设计），而模型发现需要正常跟随重定向（不少 OpenAI 兼容网关会 301）。
+	modelDiscoveryClient = &http.Client{
+		Timeout: modelFetchTimeout,
+		Transport: &http.Transport{
+			MaxIdleConns:        20,
+			MaxIdleConnsPerHost: 4,
+			IdleConnTimeout:     90 * time.Second,
+			TLSHandshakeTimeout: 5 * time.Second,
+			ForceAttemptHTTP2:   true,
+		},
+	}
 )
 
 // llmKeysetProvider 是 Redis llm:keys:{provider} 中 active 的记录。
@@ -145,8 +165,8 @@ func fetchProviderModels(ctx context.Context, base, apiKey string) ([]string, er
 	// 具名 UA：见 llmHTTPUserAgent 的说明（Cloudflare 反滥用会拒默认 UA）。
 	req.Header.Set("User-Agent", llmHTTPUserAgent)
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	// 复用带超时与连接池的共享 client（原因见 modelDiscoveryClient 定义处）。
+	resp, err := modelDiscoveryClient.Do(req)
 	if err != nil {
 		return nil, err
 	}

@@ -52,6 +52,8 @@ curl -s http://localhost:3000/health        # 前端入口（静态资源 + 同�
 | `SANDBOX_BACKEND` / `SANDBOX_SERVICE_URL` / `SANDBOX_SERVICE_TENANTS` | `service` / `http://sandbox-service:8001` / 空 | 执行下沉到独立沙箱容器；**默认启用**，白名单空 = 全部租户。要整体退出隔离设 `SANDBOX_BACKEND=local` |
 | `SANDBOX_SERVICE_MAX_CONCURRENCY` | `0`（不限） | 引擎侧对沙箱层的并发闸门；多副本时建议设置（容量与实测见 `sandbox-service/README.md` 的「扩缩与容量」） |
 | `TRUSTED_PROXY_CIDRS` | 空 | 前置 LB 时填真实来源网段（否则 IP 限流可被伪造） |
+| `RATE_LIMIT_RPM` / `RATE_LIMIT_GLOBAL` | `100` / `10000` | 单用户 / 全站每分钟配额（tenant 桶取 `global/10` 且不低于 RPM）。均为**总量语义**，不按副本数放大 |
+| `RATE_LIMIT_FAIL_CLOSE` | 空（false） | **仅**决定「启动时 Redis 就不可用」的处理：`true` = 只读放行、写操作 503；空/false = 回退进程内限流，**配额按副本放大**（多副本等于失去限流）。⚠ `DEGRADED_MODE=false`（默认）时 Redis 不可用直接拒绝启动，轮不到本开关；运行期故障由分布式限流器自身 fail-close 兜底 |
 | `TURN_RETENTION_DAYS` / `TASK_IDEMPOTENCY_RETENTION_DAYS` | 30 | 保留策略天数 |
 | `RETENTION_INTERVAL_HOURS` | 6 | 保留策略执行间隔 |
 | `CHIRON_ENV` / `APP_ENV` / `PYTHON_ENV` | 空 | **生产判定**（任一为 `production`/`prod` 即视为生产），统一入口见 `python-engine/app/envmode.py` |
@@ -68,6 +70,8 @@ curl -s http://localhost:3000/health        # 前端入口（静态资源 + 同�
 ## 5. 伸缩注意项
 
 1. **限流**：Redis 原子令牌桶，global/tenant/user 均为**每分钟配额（总量语义）**，与副本数无关，扩缩容无需调参。
+   - **运行期 Redis 故障**：分布式限流器自身 **fail-close**（`internal/api/distributed_ratelimit.go`，Eval 失败即拒绝请求），不会静默放行。
+   - **启动期 Redis 不可用**：默认（`DEGRADED_MODE=false`）直接**拒绝启动**。只有显式允许降级时，`RATE_LIMIT_FAIL_CLOSE` 才决定退化为「只读放行 + 写 503」还是「进程内限流」——**后者会让配额乘以副本数，多副本下等于失去限流，务必设 `true`**。
 2. **会话与事件**：会话元数据、SSE 事件（Redis Stream 缓冲 + Pub/Sub 实时通道）、JWT 黑名单跨副本一致；SSE 单次 Redis 操作有 200ms 超时（抖动时丢失重放能力，不影响实时输出）；慢订阅者超 3s 丢事件，客户端凭 `Last-Event-ID` 重连补齐。
 3. **引擎发现**：引擎配 `ENGINE_ADVERTISE_URL` 即向 Redis 自注册，网关每 15s 感知扩缩容；注册表为空时回退静态地址。
 4. **run 归属**：引擎把「哪个实例持有该 session 的 run」写入 `engine:run:{session_id}`（TTL 300s + 100s 心跳）。审批/取消走归属路由并携带 `run_token`（陈旧 run 的审批被拒；归属指向别的实例时返回明确的 `run owned by another engine instance`）。

@@ -143,6 +143,13 @@ services:
       PLUGIN_DATA_DIR: ${PLUGIN_DATA_DIR:-/srv/chiron/plugins}
       # 限流无需按副本数调参:global/tenant/user 三级令牌桶均为"每分钟总量配额",
       # 由 Redis 原子计数承载,与网关副本数无关(见 docs/deployment-multi-instance.md 第 5 节)。
+      RATE_LIMIT_RPM: ${RATE_LIMIT_RPM:-100}
+      RATE_LIMIT_GLOBAL: ${RATE_LIMIT_GLOBAL:-10000}
+      # 仅在「启动时 Redis 就不可用」时起作用:空/ false 会回退进程内限流,配额按
+      # 副本数放大(多副本下等于失去限流);true 则只读放行、写操作 503。
+      # 运行期 Redis 故障由分布式限流器自身 fail-close 兜底,与本开关无关。
+      # 注意:DEGRADED_MODE=false(默认)时 Redis 不可用会直接拒绝启动,轮不到本开关。
+      RATE_LIMIT_FAIL_CLOSE: ${RATE_LIMIT_FAIL_CLOSE:-}
       # 前置负载均衡器时填写真实来源网段(如 "10.0.0.0/8,172.16.0.0/12")
       TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:-}
       # 连接预算:本值 × 网关副本数 会占用 PG 连接;多副本时按副本数下调
