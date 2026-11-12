@@ -296,7 +296,7 @@ onMounted(refresh)
 .mfa-alert { margin-bottom: 12px; }
 .mfa-step { margin: 12px 0 6px; font-size: 13px; color: var(--text-2); }
 .mfa-qr { display: flex; justify-content: center; margin: 8px 0; }
-.mfa-qr img { border-radius: var(--radius-sm); background: #fff; padding: 8px; }
+.mfa-qr img { border-radius: var(--radius-sm); background: var(--qr-bg); padding: 8px; }
 .mfa-copy { cursor: pointer; color: var(--primary); }
 .mfa-codes {
   display: grid;

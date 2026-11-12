@@ -254,6 +254,10 @@
     --border-card: var(--border-subtle);
     --text-code: var(--text-primary);
     --danger: var(--error);
+    /* 二维码底色：**刻意不随主题**（MfaSettings 的 otpauth QR）。扫码器依赖深色模块
+       落在浅色底上才有对比度，暗色主题下换成 --bg-surface 会让整张图反相、扫不出来。
+       定义在 :root 而非 [data-theme=*]，各主题块不重定义它 ⇒ 恒定白色。 */
+    --qr-bg: #ffffff;
 }
 
 /* ============================================================ */

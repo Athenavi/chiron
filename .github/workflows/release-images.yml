@@ -107,6 +107,13 @@ jobs:
           load: ${{ !(github.event_name == 'push' || inputs.push) }}
 
       # ── 漏洞扫描（Trivy）：HIGH/CRITICAL 直接在 job 里失败 ──
+      # ⚠ 扫描步骤**只在 build 成功时**执行（默认 `success()`），不要写 `if: always()`。
+      # 2026-11-12 实测教训：frontend 的 `pnpm run build` 因 UI 契约（硬编码色值）失败，
+      # 镜像从未产出，而 `always()` 让 Trivy 继续跑，报出
+      #   `unable to find the specified image ... MANIFEST_UNKNOWN`
+      # 并把 job 的红点记在扫描步骤上 —— 真正坏的是 build，日志却指向 registry，
+      # 极易误判成"推送权限/镜像名"问题。与本文件下方 `Install Trivy` 那段记录的是
+      # 同一类次生报错。build 失败时 job 已在 build 步骤变红，不会漏报。
       # 已按 commit SHA 固定到 v0.36.0（该 release 标记 immutable）。历史上曾用 `@master`
       # —— 因为旧钉的 `0.28.0` 上游解析不到、且当时无法联网核实可用版本。现已联网确认
       # `v0.36.0` 存在并取其 commit SHA，消除 master 浮动带来的供应链风险。
@@ -126,7 +133,6 @@ jobs:
       # 都成功了），所以改从 Releases 取包并校验 sha256，两个扫描步骤 `skip-setup-trivy: true`。
       # 升级时改下面的 `TRIVY_VERSION` 与本注释；`trivy-action` 的 SHA 仍要单独跟。
       - name: Install Trivy（GitHub Releases，绕开解析不到的 get.trivy.dev）
-        if: always()
         env:
           TRIVY_VERSION: 0.70.0
         run: |
@@ -158,7 +164,6 @@ jobs:
           "$bin/trivy" --version
 
       - name: Trivy scan (table)
-        if: always()
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         with:
           # 二进制已由上面一步装好；不让 action 再跑一遍会失败的 install.sh。
@@ -171,7 +176,6 @@ jobs:
           exit-code: '1'
 
       - name: Trivy scan (SARIF)
-        if: always()
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         with:
           skip-setup-trivy: true
