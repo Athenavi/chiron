@@ -196,12 +196,13 @@ func (h *MailHandler) Login(w http.ResponseWriter, r *http.Request) {
 	// F2：不再硬过滤默认租户（经邀请码注册的用户属于别的租户）。同 email 跨租户
 	// 重名时优先默认租户，存量账号行为不变。
 	err = h.db.QueryRow(ctx,
-		`SELECT id, email, name, role, tenant_id
+		`SELECT id, email, name, role, tenant_id, COALESCE(account_status, 'active')
 		   FROM users
 		  WHERE lower(email) = lower($1)
 		  ORDER BY (tenant_id = $2) DESC, created_at ASC
 		  LIMIT 1`,
-		email, db.DefaultTenantID).Scan(&user.ID, &user.Email, &user.Name, &user.Role, &tenantID)
+		email, db.DefaultTenantID).Scan(&user.ID, &user.Email, &user.Name, &user.Role,
+		&tenantID, &user.AccountStatus)
 	if errors.Is(err, pgx.ErrNoRows) {
 		if !row.AutoRegister {
 			NotFound(w, "该邮箱未注册")
@@ -259,14 +260,16 @@ func (h *MailHandler) provisionMailUser(ctx context.Context, email string) (User
 		 -- （null value in column "id" violates not-null constraint）。
 		 VALUES (gen_random_uuid(), $1, $2, $3, $4, 'user', FALSE)
 		 ON CONFLICT DO NOTHING
-		 RETURNING id, email, name, role`,
+		 RETURNING id, email, name, role, COALESCE(account_status, 'active')`,
 		db.DefaultTenantID, email, name, string(passwordHash)).
-		Scan(&user.ID, &user.Email, &user.Name, &user.Role)
+		Scan(&user.ID, &user.Email, &user.Name, &user.Role, &user.AccountStatus)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// 并发建号：另一请求已用该邮箱建号，直接复用
 		err = h.db.QueryRow(ctx,
-			`SELECT id, email, name, role FROM users WHERE tenant_id = $1 AND lower(email) = lower($2)`,
-			db.DefaultTenantID, email).Scan(&user.ID, &user.Email, &user.Name, &user.Role)
+			`SELECT id, email, name, role, COALESCE(account_status, 'active')
+			   FROM users WHERE tenant_id = $1 AND lower(email) = lower($2)`,
+			db.DefaultTenantID, email).Scan(&user.ID, &user.Email, &user.Name, &user.Role,
+			&user.AccountStatus)
 	}
 	if err != nil {
 		return UserResponse{}, err

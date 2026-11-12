@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,6 +11,8 @@ import (
 
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
+
+	"github.com/athenavi/chiron/internal/auth"
 )
 
 // ── 账号注销：冻结 / 撤销（真库）──
@@ -49,7 +52,7 @@ func setUserPassword(t *testing.T, userID, plain string) {
 		t.Fatalf("生成密码哈希失败: %v", err)
 	}
 	if _, err := withP12Pool(t).Exec(context.Background(),
-		`UPDATE users SET password_hash = $2, credits = 500 WHERE id = $1`, userID, hash); err != nil {
+		`UPDATE users SET password_hash = $2, credits = 0 WHERE id = $1`, userID, hash); err != nil {
 		t.Fatalf("设置密码失败: %v", err)
 	}
 }
@@ -98,8 +101,10 @@ func TestLiveDeletionRequestFreezesAssets(t *testing.T) {
 	if credits != 0 {
 		t.Fatalf("credits 必须归零（否则并发回合仍能扣费），得到 %d", credits)
 	}
-	if frozen == nil || *frozen != 500 {
-		t.Fatalf("余额应冻结为 500，得到 %v", frozen)
+	// 余额门槛要求申请前 credits 已为 0，因此冻结值必然是 0。
+	// 保留该断言是为了防止"门槛被绕过但冻结逻辑仍按旧假设跑"。
+	if frozen == nil || *frozen != 0 {
+		t.Fatalf("余额为 0 时冻结值也应为 0，得到 %v", frozen)
 	}
 	if dueAt == nil {
 		t.Fatal("deletion_due_at 未落库")
@@ -150,8 +155,43 @@ func TestLiveDeletionRequestRejectsBadPassword(t *testing.T) {
 		Scan(&status, &credits); err != nil {
 		t.Fatalf("读回状态失败: %v", err)
 	}
-	if status != accountStatusActive || credits != 500 {
+	if status != accountStatusActive || credits != 0 {
 		t.Fatalf("拒绝后不应改状态：status=%q credits=%d", status, credits)
+	}
+}
+
+// 余额不为 0 时拒绝注销，且**不改任何状态**。
+//
+// 余额是用户已付费的资产：直接作废等于没收，留着又是悬空余额
+// （注销后无法消费）。要求先清零，责任与账目都清晰。
+func TestLiveDeletionRejectsNonZeroBalance(t *testing.T) {
+	pool := withP12Pool(t)
+	_, userID := liveSmokeFixture(t, pool)
+	p12Cleanup(t, pool, userID)
+	setUserPassword(t, userID, "correct-password")
+	// 覆盖成非零余额。
+	if _, err := pool.Exec(context.Background(),
+		`UPDATE users SET credits = 250 WHERE id = $1`, userID); err != nil {
+		t.Fatalf("设置余额失败: %v", err)
+	}
+	h := mfaTestHandler(t)
+
+	rec := deletionRequest(t, h, userID, "correct-password")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("余额未清零应 400，得到 %d body=%s", rec.Code, rec.Body.String())
+	}
+	var status string
+	var credits int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT account_status, credits FROM users WHERE id = $1`, userID).
+		Scan(&status, &credits); err != nil {
+		t.Fatalf("读回状态失败: %v", err)
+	}
+	if status != accountStatusActive {
+		t.Fatalf("被拒绝后状态不该变：%q", status)
+	}
+	if credits != 250 {
+		t.Fatalf("被拒绝后余额不该被改动：%d", credits)
 	}
 }
 
@@ -222,8 +262,8 @@ func TestLiveDeletionCancelRestoresOnlyWhatWasFrozen(t *testing.T) {
 	if status != accountStatusActive {
 		t.Fatalf("撤销后应回到 active，得到 %q", status)
 	}
-	if credits != 500 {
-		t.Fatalf("余额应恢复为 500，得到 %d", credits)
+	if credits != 0 {
+		t.Fatalf("撤销后余额应恢复为 0（申请前即为 0），得到 %d", credits)
 	}
 	if frozen != nil {
 		t.Fatal("credits_frozen 应被清空")
@@ -305,4 +345,63 @@ func TestLiveDeletionRequestIsIdempotent(t *testing.T) {
 	if !secondDue.Equal(firstDue) {
 		t.Fatalf("重复申请重置了到期时间：%v → %v", firstDue, secondDue)
 	}
+}
+
+// 注销状态必须能从 /v1/auth/profile 读到。
+//
+// 为什么必须钉这一条：SSO 回调是 302 重定向、没有 JSON 响应体，
+// 前端只能在进页面时靠 profile 拿权威状态；若这里不返回，
+// 注销中的账号会以为自己正常，点进对话页才撞 403。
+func TestLiveProfileExposesAccountStatus(t *testing.T) {
+	pool := withP12Pool(t)
+	_, userID := liveSmokeFixture(t, pool)
+	p12Cleanup(t, pool, userID)
+	h := mfaTestHandler(t)
+	ctx := context.Background()
+
+	// ① active 账号
+	rec := profileCall(t, h, userID)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("profile 失败: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Data struct {
+			AccountStatus string `json:"account_status"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("解析 profile 响应失败: %v", err)
+	}
+	if body.Data.AccountStatus != accountStatusActive {
+		t.Fatalf("active 账号的 account_status 应为 active，得到 %q", body.Data.AccountStatus)
+	}
+
+	// ② 冻结中的账号
+	if _, err := pool.Exec(ctx,
+		`UPDATE users SET account_status = 'pending_deletion' WHERE id = $1`, userID); err != nil {
+		t.Fatalf("设置状态失败: %v", err)
+	}
+	invalidateAccountStatusCache(userID)
+
+	rec = profileCall(t, h, userID)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("冻结期 profile 仍应可用（否则前端拿不到状态）: status=%d", rec.Code)
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("解析 profile 响应失败: %v", err)
+	}
+	if body.Data.AccountStatus != accountStatusPendingDeletion {
+		t.Fatalf("冻结中账号的 account_status 应为 pending_deletion，得到 %q",
+			body.Data.AccountStatus)
+	}
+}
+
+// profileCall 以 userID 身份调用 Profile（需要 claims，而 Profile 读的是 auth.GetClaims）。
+func profileCall(t *testing.T, h *AuthHandler, userID string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/v1/auth/profile", nil)
+	ctx := auth.WithClaims(req.Context(), &auth.Claims{UserID: userID, TenantID: 1})
+	rec := httptest.NewRecorder()
+	h.Profile(rec, req.WithContext(ctx))
+	return rec
 }

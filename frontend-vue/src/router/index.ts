@@ -170,14 +170,14 @@ export const routes = [
         path: 'api-keys',
         name: 'AdminApiKeys',
         component: () => import('../views/admin/ApiKeysView.vue'),
-        meta: { title: t('common.api_key_management') },
+        meta: { title: t('common.api_key_management'), requiresOwner: true },
       },
       {
         // 运行时监控：原「性能监控 / 队列监控 / 缓存监控」三页合并为一个 Tabs 页面（懒加载）
         path: 'monitor',
         name: 'AdminMonitor',
         component: () => import('../views/admin/MonitorView.vue'),
-        meta: { title: t('admin.runtime_monitoring') },
+        meta: { title: t('admin.runtime_monitoring'), requiresOwner: true },
       },
       // 旧入口保留重定向，避免书签 / 文档 / 告警链接失效
       {
@@ -196,14 +196,14 @@ export const routes = [
         path: 'settings',
         name: 'AdminSettings',
         component: () => import('../views/admin/SettingsView.vue'),
-        meta: { title: t('settings.system_settings') },
+        meta: { title: t('settings.system_settings'), requiresOwner: true },
       },
       // ── 数据存储（原「Redis 管理」+「数据库管理」合并）──
       {
         path: 'datastores',
         name: 'AdminDataStores',
         component: () => import('../views/admin/DataStoresView.vue'),
-        meta: { title: t('common.data_storage') },
+        meta: { title: t('common.data_storage'), requiresOwner: true },
       },
       // ── 租户与域名（原「租户管理」+「域名管理」合并）──
       {
@@ -217,6 +217,14 @@ export const routes = [
         name: 'AdminAudit',
         component: () => import('../views/admin/AuditView.vue'),
         meta: { title: t('admin.operation_audit') },
+      },
+      // 账号注销归档：已注销用户的个人数据快照（仅平台 owner 可读 —
+      // 归档含完整个人数据，普通租户 admin 不应跨租户可见）。
+      {
+        path: 'account-archives',
+        name: 'AdminAccountArchives',
+        component: () => import('../views/admin/AccountArchivesView.vue'),
+        meta: { title: t('admin.account_archives'), requiresOwner: true },
       },
       // D1：自诊断（"配了但不生效"的自答清单）
       {
@@ -238,14 +246,14 @@ export const routes = [
         path: 'package-templates',
         name: 'AdminPackageTemplates',
         component: () => import('../views/admin/PackagesView.vue'),
-        meta: { title: t('admin.package_templates_title') },
+        meta: { title: t('admin.package_templates_title'), requiresOwner: true },
       },
       {
         // 配额审批：租户提交的调整申请，通过后立即对限流闸门生效。
         path: 'quota-review',
         name: 'AdminQuotaReview',
         component: () => import('../views/admin/QuotaReviewView.vue'),
-        meta: { title: t('admin.quota_review_title') },
+        meta: { title: t('admin.quota_review_title'), requiresOwner: true },
       },
       {
         path: 'market',

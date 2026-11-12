@@ -262,8 +262,9 @@ func (h *SmsHandler) Login(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	var user UserResponse
 	err = h.db.QueryRow(ctx,
-		`SELECT id, email, name, role FROM users WHERE tenant_id = $1 AND phone = $2`,
-		db.DefaultTenantID, phone).Scan(&user.ID, &user.Email, &user.Name, &user.Role)
+		`SELECT id, email, name, role, COALESCE(account_status, 'active')
+		   FROM users WHERE tenant_id = $1 AND phone = $2`,
+		db.DefaultTenantID, phone).Scan(&user.ID, &user.Email, &user.Name, &user.Role, &user.AccountStatus)
 	if errors.Is(err, pgx.ErrNoRows) {
 		if !row.AutoRegister {
 			NotFound(w, "该手机号未注册")
@@ -315,13 +316,14 @@ func (h *SmsHandler) provisionSmsUser(ctx context.Context, phone string) (UserRe
 		 -- 与邮箱自动注册同一个坑：漏这一列 ⇒ null value in column "id"。
 		 VALUES (gen_random_uuid(), $1, $2, $3, $4, 'user', $5, FALSE)
 		 ON CONFLICT DO NOTHING
-		 RETURNING id, email, name, role`,
-		db.DefaultTenantID, email, name, string(passwordHash), phone).Scan(&user.ID, &user.Email, &user.Name, &user.Role)
+		 RETURNING id, email, name, role, COALESCE(account_status, 'active')`,
+		db.DefaultTenantID, email, name, string(passwordHash), phone).Scan(&user.ID, &user.Email, &user.Name, &user.Role, &user.AccountStatus)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// 并发建号：另一请求已用该手机号建号，直接复用
 		err = h.db.QueryRow(ctx,
-			`SELECT id, email, name, role FROM users WHERE tenant_id = $1 AND phone = $2`,
-			db.DefaultTenantID, phone).Scan(&user.ID, &user.Email, &user.Name, &user.Role)
+			`SELECT id, email, name, role, COALESCE(account_status, 'active')
+			   FROM users WHERE tenant_id = $1 AND phone = $2`,
+			db.DefaultTenantID, phone).Scan(&user.ID, &user.Email, &user.Name, &user.Role, &user.AccountStatus)
 	}
 	if err != nil {
 		return UserResponse{}, err

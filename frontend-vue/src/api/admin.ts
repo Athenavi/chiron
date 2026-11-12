@@ -905,3 +905,40 @@ export async function reviewQuotaRequest(
   )
   return data?.data ?? { id, status: payload.status }
 }
+
+// ── 账号注销归档（平台 owner）──
+//
+// 归档是「注销到期清除前生成的个人数据快照」，写在对象存储
+// `account-archive/{user_id}/{时间戳}.json`。后端两个端点都挂
+// platformReadMW（平台 owner），普通租户 admin 读不到 ——
+// 归档含完整个人数据，跨租户可见等于越权。
+
+export interface AccountArchive {
+  /** 文件名，形如 20260101T000000Z.json */
+  name: string
+  size: number
+  modified: string
+}
+
+/** 列出某账号的全部归档（只返回元信息，不返回内容）。 */
+export async function listAccountArchives(userID: string): Promise<AccountArchive[]> {
+  const { data } = await api.get(
+    `/v1/admin/account-archives/${encodeURIComponent(userID)}`,
+  )
+  return data?.data?.archives ?? []
+}
+
+/**
+ * 下载单个归档。
+ *
+ * 用 `responseType: 'blob'`：响应体是 JSON 文件而不是接口包装。
+ * 注意失败时响应体也是 Blob —— 调用方要用 `blobErrorPayload` 读回文本，
+ * 否则用户只能看到「下载失败」，看不到「归档不存在」这种关键区分。
+ */
+export async function downloadAccountArchive(userID: string, file: string): Promise<Blob> {
+  const resp = await api.get(
+    `/v1/admin/account-archives/${encodeURIComponent(userID)}/${encodeURIComponent(file)}`,
+    { responseType: 'blob' },
+  )
+  return resp.data as Blob
+}

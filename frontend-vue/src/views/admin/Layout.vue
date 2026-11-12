@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, h, watch, onMounted } from 'vue'
+import type { VNode } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '../../stores/auth'
 import ThemeSwitcher from '../../components/ThemeSwitcher.vue'
@@ -39,6 +40,7 @@ import {
   ControlOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
+  InboxOutlined,
 } from '@ant-design/icons-vue'
 
 import { useI18n } from 'vue-i18n'
@@ -75,36 +77,58 @@ const breadcrumbs = computed(() => {
 })
 
 // 菜单分组：平台后台只保留平台级能力（租户级配置在 /tenant 下由租户管理员维护）
-const menuGroups = computed(() => [
+//
+// `ownerOnly` 对齐后端 `platformReadMW`（`RequirePlatformOwner`）。
+// 租户 admin 持有 `admin:read`，但打这些端点照样 403 —— 菜单若照常渲染，
+// 用户点进去只能看到一个空页面加报错，会误以为系统坏了。
+// 过滤放在 computed 里而不是模板里：桌面侧栏与移动抽屉两处渲染共用这一份结果。
+interface AdminMenuItem {
+  key: string
+  label: string
+  icon: () => VNode
+  ownerOnly?: boolean
+}
+
+const menuGroups = computed(() => {
+  const groups: { key: string; label: string; children: AdminMenuItem[] }[] = [
   {
     key: 'g-monitor', label: t('admin.overview_monitoring'),
     children: [
       { key: '/admin/dashboard', label: t('common.dashboard'), icon: () => h(DashboardOutlined) },
       // 原「性能监控 / 队列监控 / 缓存监控」三页已合并为运行时监控（Tabs）
-      { key: '/admin/monitor', label: t('admin.runtime_monitoring'), icon: () => h(ThunderboltOutlined) },
+      { key: '/admin/monitor', label: t('admin.runtime_monitoring'), icon: () => h(ThunderboltOutlined), ownerOnly: true },
     ],
   },
   {
     key: 'g-system', label: t('common.system'),
     children: [
-      { key: '/admin/api-keys', label: t('common.api_key_management'), icon: () => h(KeyOutlined) },
-      { key: '/admin/settings', label: t('settings.system_settings'), icon: () => h(SettingOutlined) },
+      { key: '/admin/api-keys', label: t('common.api_key_management'), icon: () => h(KeyOutlined), ownerOnly: true },
+      { key: '/admin/settings', label: t('settings.system_settings'), icon: () => h(SettingOutlined), ownerOnly: true },
       // 原「Redis 管理 + 数据库管理」合并为数据存储（Tabs）
-      { key: '/admin/datastores', label: t('common.data_storage'), icon: () => h(DatabaseOutlined) },
-      // 原「租户管理 + 域名管理」合并为租户与域名（Tabs）
+      { key: '/admin/datastores', label: t('common.data_storage'), icon: () => h(DatabaseOutlined), ownerOnly: true },
+      // 原「租户管理 + 域名管理」合并为租户与域名（Tabs）。
+      // 面板级权限不同级（tenants 仅 owner / domains admin 可读），
+      // 由 TenancyView 内部按角色裁面板，菜单项本身对 admin 保留。
       { key: '/admin/tenancy', label: t('admin.tenants_and_domains'), icon: () => h(TeamOutlined) },
       // 平台视角只看租户这一级用量；成员级明细在租户管理员后台
       { key: '/admin/usage', label: t('admin.usage_insights'), icon: () => h(BarChartOutlined) },
       // 平台套餐模板：租户新建套餐时从这里预填
-      { key: '/admin/package-templates', label: t('admin.package_templates_title'), icon: () => h(ShoppingOutlined) },
+      { key: '/admin/package-templates', label: t('admin.package_templates_title'), icon: () => h(ShoppingOutlined), ownerOnly: true },
       // 配额审批：租户提交的调整申请，通过后立即对限流闸门生效
-      { key: '/admin/quota-review', label: t('admin.quota_review_title'), icon: () => h(ControlOutlined) },
+      { key: '/admin/quota-review', label: t('admin.quota_review_title'), icon: () => h(ControlOutlined), ownerOnly: true },
       { key: '/admin/audit', label: t('admin.operation_audit'), icon: () => h(FileSearchOutlined) },
+      // 账号注销归档：与审计同属"合规留痕"，放同一分组。
+      { key: '/admin/account-archives', label: t('admin.account_archives'), icon: () => h(InboxOutlined), ownerOnly: true },
       // D1：自诊断 —— 与设置/数据存储同属"系统"类：都是"让部署正确运转"的操作面。
       { key: '/admin/diagnostics', label: t('admin.diagnostics'), icon: () => h(MedicineBoxOutlined) },
     ],
   },
-])
+  ]
+  return groups
+    .map(g => ({ ...g, children: g.children.filter(m => !m.ownerOnly || authStore.isOwner) }))
+    // 整组都被过滤掉时不留空标题
+    .filter(g => g.children.length > 0)
+})
 
 // 当前路由命中的菜单项（用于侧边栏 selectedKeys）
 const selectedKeys = computed(() => {

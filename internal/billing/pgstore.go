@@ -213,7 +213,24 @@ func (s *PGStore) applyCreditTx(ctx context.Context, userID string, delta int, g
 			      WHERE id = $2 AND COALESCE(credits, 0) >= $3 RETURNING credits`
 			args = append(args, guardMin)
 		} else {
-			q = `UPDATE users SET credits = COALESCE(credits, 0) + $1 WHERE id = $2 RETURNING credits`
+			// 注销冻结期（pending_deletion）的**入账**不进 credits，而进 credits_frozen。
+			//
+			// 为什么：申请注销要求余额已为 0，但冻结期间的退款/补偿仍可能到账。
+			// 若直接加到 credits，用户立刻又能消费 —— "清空资产"当场失效，
+			// 而账号还是"待删除"状态，语义自相矛盾。
+			// 放到 credits_frozen：既保住了用户应得的钱（撤销时原样还回），
+			// 又不让它变成可消费余额；到期清除时会随归档一并记录。
+			//
+			// 只处理 delta > 0：冻结期 credits 恒为 0，扣减本来就会被余额门槛挡住。
+			q = `UPDATE users
+			        SET credits = COALESCE(credits, 0) + CASE
+			              WHEN COALESCE(account_status, 'active') = 'pending_deletion' AND $1 > 0
+			              THEN 0 ELSE $1 END,
+			            credits_frozen = CASE
+			              WHEN COALESCE(account_status, 'active') = 'pending_deletion' AND $1 > 0
+			              THEN COALESCE(credits_frozen, 0) + $1
+			              ELSE credits_frozen END
+			      WHERE id = $2 RETURNING credits`
 		}
 
 		// 幂等扣费（B4）：turnID 非空时先用流水的唯一索引占位，

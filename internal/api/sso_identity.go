@@ -248,10 +248,10 @@ func (h *SSOHandler) SetPassword(w http.ResponseWriter, r *http.Request) {
 func (h *SSOHandler) findIdentityUser(ctx context.Context, providerID, subject string) (*ssoUser, error) {
 	var user ssoUser
 	err := h.db.QueryRow(ctx,
-		`SELECT u.id, u.email, u.name, u.role
+		`SELECT u.id, u.email, u.name, u.role, COALESCE(u.account_status, 'active')
 		 FROM ent_user_identities ui JOIN users u ON u.id = ui.user_id
 		 WHERE ui.provider_id = $1 AND ui.subject = $2`, providerID, subject).
-		Scan(&user.ID, &user.Email, &user.Name, &user.Role)
+		Scan(&user.ID, &user.Email, &user.Name, &user.Role, &user.AccountStatus)
 	if err != nil {
 		return nil, err
 	}
@@ -287,15 +287,19 @@ func (h *SSOHandler) provisionAndBind(r *http.Request, provider *ssoProvider, id
 	// 同租户同 email 已有本地账号时直接绑定，避免重复建号
 	var user ssoUser
 	err = h.db.QueryRow(ctx,
-		`SELECT id, email, name, role FROM users WHERE tenant_id = $1 AND email = $2`,
-		provider.TenantID, email).Scan(&user.ID, &user.Email, &user.Name, &user.Role)
+		`SELECT id, email, name, role, COALESCE(account_status, 'active')
+		   FROM users WHERE tenant_id = $1 AND email = $2`,
+		provider.TenantID, email).Scan(&user.ID, &user.Email, &user.Name, &user.Role,
+		&user.AccountStatus)
 	if errors.Is(err, pgx.ErrNoRows) {
 		err = h.db.QueryRow(ctx,
 			`INSERT INTO users (id, tenant_id, email, name, password_hash, role, password_set)
 			 -- id 必须**显式**给：users.id 是 varchar(36) NOT NULL 且没有默认值（见 baseline 迁移）。
 			 -- 与邮箱/短信自动注册同一个坑：漏这一列 ⇒ null value in column "id"。
-			 VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, FALSE) RETURNING id`,
-			provider.TenantID, email, name, string(passwordHash), role).Scan(&user.ID)
+			 VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, FALSE)
+			 RETURNING id, COALESCE(account_status, 'active')`,
+			provider.TenantID, email, name, string(passwordHash), role).
+			Scan(&user.ID, &user.AccountStatus)
 		if err != nil {
 			return nil, err
 		}

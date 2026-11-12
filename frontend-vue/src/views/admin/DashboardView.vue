@@ -13,6 +13,7 @@ import { LineChart, PieChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/components'
 import VChart from 'vue-echarts'
 import { getMetrics, listApiKeys, getOnboardingFunnel, type OnboardingFunnel } from '@/api/admin'
+import { useAuthStore } from '@/stores/auth'
 import { useThemeStore } from '@/stores/theme'
 import PageSkeleton from '@/components/common/PageSkeleton.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
@@ -23,16 +24,20 @@ use([CanvasRenderer, LineChart, PieChart, GridComponent, TooltipComponent, Legen
 
 const router = useRouter()
 const themeStore = useThemeStore()
+const authStore = useAuthStore()
 const loading = ref(true)
 const error = ref('')
 
-// 快捷导航：三个监控页已合并为「运行时监控」，定时任务已拆为独立页面
-const navItems = [
-  { label: t('admin.runtime_monitoring'), path: '/admin/monitor', icon: markRaw(ThunderboltOutlined), desc: t('admin.performance_queue_cache') },
-  { label: 'API Key', path: '/admin/api-keys', icon: markRaw(KeyOutlined), desc: t('common.keys_and_rate_limiting') },
-  { label: t('task.scheduled_tasks'), path: '/admin/cron', icon: markRaw(ClockCircleOutlined), desc: t('common.automated_scheduling') },
-  { label: t('settings.system_settings'), path: '/admin/settings', icon: markRaw(SettingOutlined), desc: t('common.global_config') },
-]
+// 快捷导航：三个监控页已合并为「运行时监控」，定时任务已拆为独立页面。
+//
+// `ownerOnly` 对齐后端 `platformReadMW`：这些页面对租户 admin 会 403，
+// 快捷入口比侧边菜单更容易被当成"能点就一定能进"，所以同样按角色过滤。
+const navItems = computed(() => [
+  { label: t('admin.runtime_monitoring'), path: '/admin/monitor', icon: markRaw(ThunderboltOutlined), desc: t('admin.performance_queue_cache'), ownerOnly: true },
+  { label: 'API Key', path: '/admin/api-keys', icon: markRaw(KeyOutlined), desc: t('common.keys_and_rate_limiting'), ownerOnly: true },
+  { label: t('task.scheduled_tasks'), path: '/admin/cron', icon: markRaw(ClockCircleOutlined), desc: t('common.automated_scheduling'), ownerOnly: false },
+  { label: t('settings.system_settings'), path: '/admin/settings', icon: markRaw(SettingOutlined), desc: t('common.global_config'), ownerOnly: true },
+].filter(item => !item.ownerOnly || authStore.isOwner))
 
 const stats = ref({
   connections: 0,
@@ -180,7 +185,10 @@ async function fetchDashboardData() {
   try {
     const [metricsRes, keysRes, funnelRes] = await Promise.allSettled([
       getMetrics(),
-      listApiKeys(),
+      // API Key 列表走 `platformReadMW`（仅平台 owner）：租户 admin 调用必 403。
+      // 不请求比"请求了再把错吞掉"干净 —— 少一条无谓的控制台报错，
+      // 也不会让人以为密钥列表加载失败。占位空数组让下面的分支保持单一形状。
+      authStore.isOwner ? listApiKeys() : Promise.resolve([]),
       getOnboardingFunnel(),
     ])
 
@@ -388,6 +396,7 @@ onUnmounted(() => {
           </Card>
         </Col>
         <Col
+          v-if="authStore.isOwner"
           :xs="24"
           :lg="12"
         >

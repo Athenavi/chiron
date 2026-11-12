@@ -13,6 +13,7 @@ import (
 	"github.com/athenavi/chiron/config"
 	"github.com/athenavi/chiron/internal/auth"
 	"github.com/athenavi/chiron/internal/db"
+	"github.com/athenavi/chiron/internal/session"
 	"github.com/jackc/pgx/v5"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -114,6 +115,14 @@ type AuthHandler struct {
 	emailBloom *userEmailBloom
 	// notifier 可选：注入后凭邀请码注册成功会给新成员本人发一条站内信（P2-3）。
 	notifier notificationWriter
+	// sessionMgr 可选：注入后注销冻结时能打断该用户正在跑的回合。
+	// nil 时只冻结资产、不打断（会话会在下次交互时自然失败）。
+	sessionMgr *session.Manager
+}
+
+// SetSessionManager injects the session manager (注销冻结时打断运行中的回合).
+func (h *AuthHandler) SetSessionManager(m *session.Manager) {
+	h.sessionMgr = m
 }
 
 func NewAuthHandler(cfg *config.Config) *AuthHandler {
@@ -156,6 +165,12 @@ type UserResponse struct {
 	Email string `json:"email"`
 	Name  string `json:"name"`
 	Role  string `json:"role"`
+	// AccountStatus 是注销状态（active / pending_deletion / purged）。
+	//
+	// 随登录响应下发，前端才能在**登录成功后立刻**把用户导向受限页面
+	// （只留设置页的导出与撤销），而不是等他点开对话页撞 403。
+	// 空串按 active 处理（兼容未填该字段的旧响应）。
+	AccountStatus string `json:"account_status,omitempty"`
 }
 
 // SetTokenCookie sets the JWT as an HTTP-only secure cookie.
@@ -273,13 +288,15 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	// 租户，硬过滤会让它们永远登不进来。改为按 email 取用户，并在同 email 跨租户
 	// 重名时优先默认租户（存量账号行为不变）。
 	err = tx.QueryRow(ctx,
-		`SELECT id, email, name, role, tenant_id, password_hash, totp_enabled
+		`SELECT id, email, name, role, tenant_id, password_hash, totp_enabled,
+		        COALESCE(account_status, 'active')
 		   FROM users
 		  WHERE email = $1
 		  ORDER BY (tenant_id = $2) DESC, created_at ASC
 		  LIMIT 1`,
 		req.Email, DefaultTenantID,
-	).Scan(&user.ID, &user.Email, &user.Name, &user.Role, &tenantID, &passwordHash, &totpEnabled)
+	).Scan(&user.ID, &user.Email, &user.Name, &user.Role, &tenantID, &passwordHash,
+		&totpEnabled, &user.AccountStatus)
 	if err != nil {
 		slog.Warn("login failed", "email", maskEmail(req.Email), "error", err)
 		h.logLoginFailure(r.Context(), r, req.Email, DefaultTenantID, r.RemoteAddr)
@@ -621,15 +638,23 @@ func (h *AuthHandler) Profile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var settings map[string]interface{}
+	var accountStatus string
 	if err := db.GlobalDBManager.QueryRow(r.Context(),
-		`SELECT COALESCE(settings::jsonb, '{}'::jsonb) FROM users WHERE id = $1`, claims.UserID).Scan(&settings); err != nil {
+		`SELECT COALESCE(settings::jsonb, '{}'::jsonb), COALESCE(account_status, 'active')
+		   FROM users WHERE id = $1`, claims.UserID).Scan(&settings, &accountStatus); err != nil {
 		settings = map[string]interface{}{}
+		// 读不到状态时按 active 处理：这是"展示层"的判断依据，
+		// 真正的拦截在 AccountDeletionGate（服务端 fail-close）。
+		// 若这里也 fail-close，DB 抖动会让所有正常用户的设置页都报错。
+		accountStatus = accountStatusActive
 	}
 	OK(w, map[string]interface{}{
 		"user_id":  claims.UserID,
 		"email":    claims.Email,
 		"role":     claims.Role,
 		"perms":    claims.Perms,
+		// account_status 供前端路由守卫把注销中的账号限制在设置页。
+		"account_status": accountStatus,
 		"settings": settings,
 	})
 }

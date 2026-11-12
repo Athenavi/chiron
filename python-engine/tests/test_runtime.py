@@ -157,10 +157,24 @@ class TestCompactionConfig:
         assert "(truncated" in truncated
 
     def test_auto_uses_default_thresholds(self):
-        """auto 策略默认行为与旧逻辑一致（阈值 0.8 prune / 0.6 snipe）。"""
-        msgs = self._long_tool_msgs(3)
-        out = _compact_messages(msgs)  # 无 cfg → 默认
-        assert isinstance(out, list) and len(out) <= len(msgs)
+        """auto 策略：token 压力到 85% 走 prune，到 70% 走 snipe，未到不动。
+
+        必须**显式给预算**：`max_context_tokens=0` 的语义是"由模型窗口表决定"
+        （生产路径由 `runtime._compact_with_notice` 填入真实窗口），直接调用时
+        查不到窗口，只剩条数上限生效 —— 那样就测不到 token 分级了。
+        """
+        msgs = self._long_tool_msgs(3)  # 6 条，每条 tool ≈ 2000 chars
+
+        # 预算远大于内容 → 不压缩
+        assert _compact_messages(msgs, CompactionConfig(max_context_tokens=10**6)) == msgs
+
+        # 预算把占用推到 70%~85% 之间 → 只截断工具结果，条数不变
+        sniped = _compact_messages(msgs, CompactionConfig(max_context_tokens=3500))
+        assert len(sniped) == len(msgs)
+
+        # 预算把占用推过 85% → prune，条数减少
+        pruned = _compact_messages(msgs, CompactionConfig(max_context_tokens=1500))
+        assert len(pruned) < len(msgs)
 
 
 class TestPruneMessages:

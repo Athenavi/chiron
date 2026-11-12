@@ -10,6 +10,16 @@ export interface User {
   name: string
   role: string
   tenant_id: number
+  /**
+   * 账号状态：active / pending_deletion / purged。
+   *
+   * 来自 /v1/auth/profile（权威）与登录响应。注销冻结期的账号**可以登录**，
+   * 但只能进设置页做两件事：导出数据、撤销注销。路由守卫据此收窄可访问页面。
+   *
+   * 刻意**不持久化**到 localStorage：这是权限依据，必须每次从服务端取，
+   * 落盘等于给了本地篡改的机会。
+   */
+  account_status?: string
   /** 用户设置（换肤、朗读音色等）。由 GET /v1/auth/profile 下发、PUT 局部合并。 */
   settings?: Record<string, unknown>
 }
@@ -80,6 +90,27 @@ export const useAuthStore = defineStore('auth', () => {
   const isAuthenticated = computed(() => !!user.value)
   // S 修复：owner 角色拥有全部 admin 权限，isAdmin 须同时识别 admin + owner
   const isAdmin = computed(() => user.value?.role === 'admin' || user.value?.role === 'owner')
+  /**
+   * 是否为**平台级** owner —— 与后端 `isPlatformOwner` 同口径（`role === 'owner'`）。
+   *
+   * 存在的理由：`/admin` 后台里有一大批端点挂的是 `platformReadMW`
+   * （`RequirePlatformOwner`），租户 admin 持有 `admin:read` 也照样 403。
+   * 前端拿这个判断来决定**菜单渲不渲染**，避免"能看见、点进去必 403"。
+   *
+   * 注意它只管渲染，不是权限闸门 —— 真正的拦截在服务端，
+   * 这里的 role 也只是服务端 profile 的镜像，不持久化、不可篡改。
+   */
+  const isOwner = computed(() => user.value?.role === 'owner')
+  /**
+   * 账号是否处于注销冻结期（已申请注销、尚未到期清除）。
+   *
+   * 冻结期**允许登录**，但只能进设置页（导出数据 / 撤销注销）。
+   * 服务端有 AccountDeletionGate 兜底（其余接口一律 403），
+   * 这里的作用是别让用户点进一个注定 403 的页面。
+   *
+   * 空值按 false：老响应没有该字段，且 profile 读不到时会回退 active。
+   */
+  const isAccountFrozen = computed(() => user.value?.account_status === 'pending_deletion')
 
   async function login(email: string, password: string, captcha?: { token: string; randstr?: string }) {
     loading.value = true
@@ -184,6 +215,8 @@ export const useAuthStore = defineStore('auth', () => {
         name: data.name || data.email,
         role: data.role,
         tenant_id: data.tenant_id || 0,
+        // 权限依据必须来自服务端；守卫据此把冻结期账号限制在设置页。
+        account_status: data.account_status,
         settings: data.settings,
       }
       persistUserToStorage(user.value)
@@ -242,6 +275,8 @@ export const useAuthStore = defineStore('auth', () => {
     loading,
     isAuthenticated,
     isAdmin,
+    isOwner,
+    isAccountFrozen,
     mfaChallenge,
     initToken,
     login,

@@ -41,6 +41,9 @@ const (
 	// accountPurgeBatchSize 每轮处理的账号数上限。
 	// 清理是低优先级后台工作，一次处理太多会长时间占用连接池。
 	accountPurgeBatchSize = 20
+	// accountPurgeLockKey 是"本轮清理归我"的 advisory lock 键。
+	// 每台网关都会跑这个 worker，靠它保证同一时刻只有一台上传归档 + 删数据。
+	accountPurgeLockKey = "chiron:account-purge"
 )
 
 // purgeDueAccounts 清除已过期宽限期的账号，返回成功处理的个数。
@@ -338,12 +341,50 @@ func StartAccountPurgeSweep(ctx context.Context, interval time.Duration, store *
 //
 // 单轮超时是必要的：清一个账号要删 20+ 张表并上传归档，若某张表被锁，
 // 没有超时会让这个 goroutine 永久挂住，之后再也不会清理任何账号。
+//
+// **多副本串行化**：每台网关都会启动这个 worker，若不加锁，N 个副本会同时
+// 处理同一批账号 —— 归档互相覆盖（无害但浪费）、删除第二次删 0 行（无害）、
+// 日志里 N 份重复告警（有害：真正的失败会被淹没）。用 session 级 advisory
+// lock 做轮级互斥：抢不到的副本本轮直接跳过，下一轮再来。
 func runPurgeRound(parent context.Context, store *storage.AtomicStore) {
 	if parent.Err() != nil {
 		return
 	}
 	ctx, cancel := context.WithTimeout(parent, 10*time.Minute)
 	defer cancel()
+
+	// 锁必须绑在**同一条连接**上：pg_advisory_lock 是会话级状态，
+	// 若 lock 与 unlock 落在不同连接上，解锁会静默失败并在池里留下永久锁。
+	pool, err := db.GlobalDBManager.GetPool()
+	if err != nil {
+		return
+	}
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		slog.Warn("account purge: acquire conn failed", "error", err)
+		return
+	}
+	defer conn.Release()
+
+	var locked bool
+	if err := conn.QueryRow(ctx,
+		`SELECT pg_try_advisory_lock(hashtext($1))`, accountPurgeLockKey).Scan(&locked); err != nil {
+		slog.Warn("account purge: try lock failed", "error", err)
+		return
+	}
+	if !locked {
+		// 另一副本正在跑：正常现象，不是错误（Debug 级别）。
+		slog.Debug("account purge: another replica is running this round, skipping")
+		return
+	}
+	defer func() {
+		// 用 WithoutCancel：ctx 可能已超时，但锁必须归还。
+		if _, err := conn.Exec(context.WithoutCancel(ctx),
+			`SELECT pg_advisory_unlock(hashtext($1))`, accountPurgeLockKey); err != nil {
+			slog.Warn("account purge: release lock failed", "error", err)
+		}
+	}()
+
 	n := purgeDueAccounts(ctx, store)
 	if n > 0 {
 		slog.Info("account purge round done", "purged", n)

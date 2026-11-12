@@ -25,8 +25,12 @@ logger = logging.getLogger(__name__)
 
 #: 窗口配置的进程内缓存 TTL（秒）
 WINDOW_CACHE_TTL_SECONDS = 300
-#: 查不到窗口时的回落值（与 `runtime.MAX_CONTEXT_TOKENS` 同值，保持历史行为）
-DEFAULT_CONTEXT_WINDOW = 8192
+#: 查不到窗口时的回落值（与 `compaction.MAX_CONTEXT_TOKENS` 同值，保持同口径）。
+#:
+#: 旧值 8192 会让**每个会话都在几轮内触顶**：压缩判定按这个数算比例，
+#: 而现代模型窗口普遍 ≥128K。真正的小窗口模型应当在 `llm_models.context_window`
+#: 里如实登记 —— 那是数据问题，不该用"给所有人一个极小兜底"来掩盖。
+DEFAULT_CONTEXT_WINDOW = 128000
 #: 查不到输出上限时的回落值（与 `settings.default_max_tokens` 同值，保持历史行为）
 DEFAULT_MAX_OUTPUT_TOKENS = 4096
 #: 输出上限的下限。管理端填 1 会让模型一个字都说不完；低于此值按未知处理。

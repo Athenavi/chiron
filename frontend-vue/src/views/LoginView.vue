@@ -4,6 +4,7 @@ import { useRouter, useRoute } from 'vue-router'
 import { Card, Form, FormItem, Input, Button, Alert, Space, Tabs, TabPane, message } from 'ant-design-vue'
 import { MailOutlined, LockOutlined, MobileOutlined, SafetyOutlined } from '@ant-design/icons-vue'
 import { useAuthStore } from '../stores/auth'
+import { FROZEN_ALLOWED_PATH } from '../router/guard'
 import { getCaptchaPublicConfig, getSmsStatus, sendSmsCode, smsLogin, isValidPhone, getEmailStatus, sendEmailCode, emailLogin, isValidEmail } from '../api/auth'
 import { useSmsCountdown } from '../composables/useSmsCountdown'
 import CaptchaWidget from '../components/CaptchaWidget.vue'
@@ -364,6 +365,12 @@ async function handleLogin() {
       mfaStep.value = true
       return
     }
+    // 注销冻结期：直接进设置页（那里有导出与撤销），
+    // 不要先跳 /chat 再被守卫弹回来 —— 那一下闪跳会让用户以为出了故障。
+    if (authStore.isAccountFrozen) {
+      router.replace(FROZEN_ALLOWED_PATH)
+      return
+    }
     // owner/admin 登录后进入管理后台，普通 user 进入对话
     const role = authStore.user?.role
     router.push(role === 'admin' || role === 'owner' ? '/admin' : '/chat')
@@ -397,6 +404,11 @@ async function handleMfaVerify() {
   }
   try {
     const user = await authStore.completeMfaLogin(mfaCode.value.trim())
+    // 与密码登录一致：冻结期直接进设置页，不先跳 /chat 再被守卫弹回来。
+    if (authStore.isAccountFrozen) {
+      router.replace(FROZEN_ALLOWED_PATH)
+      return
+    }
     const role = user?.role
     router.push(role === 'admin' || role === 'owner' ? '/admin' : '/chat')
   } catch (e) {

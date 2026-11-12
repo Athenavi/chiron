@@ -155,6 +155,21 @@ func (h *AuthHandler) RequestAccountDeletion(w http.ResponseWriter, r *http.Requ
 
 	dueAt, err := freezeUserAssets(ctx, userID)
 	if err != nil {
+		// 余额未清零是可自行解决的问题，给 400 + 余额参数，
+		// 而不是让用户看到无从下手的 500。
+		var balErr *deletionBalanceError
+		if errors.As(err, &balErr) {
+			db.AuditLog(ctx, userID, tenantID, "account.delete_denied",
+				"/v1/me/deletion", "reason=balance_not_zero", r.RemoteAddr,
+				map[string]interface{}{"credits": balErr.credits})
+			JSON(w, http.StatusBadRequest, APIResponse{
+				Success: false,
+				Error:   balErr.Error(),
+				Code:    "account_balance_not_zero",
+				Params:  map[string]interface{}{"credits": balErr.credits},
+			})
+			return
+		}
 		slog.Error("account deletion: freeze failed", "user_id", userID, "error", err)
 		logAndRespond(w, err, http.StatusInternalServerError, "deletion request failed")
 		return
@@ -170,6 +185,15 @@ func (h *AuthHandler) RequestAccountDeletion(w http.ResponseWriter, r *http.Requ
 	// 冻结是"立即生效"的用户预期，不能靠 TTL 自然过期。
 	invalidateAccountStatusCache(userID)
 
+	// 打断该用户正在跑的回合。
+	//
+	// 位置很关键：必须在**事务提交之后**。放在事务内的话，一旦后续步骤失败回滚，
+	// 用户会话已经被打断、注销却撤销了 —— 等于白挨一刀。
+	//
+	// 不打断的后果：余额刚被清零，进行中的回合跑到下一次扣费就会撞"余额不足"，
+	// 用户看到的是"点了注销之后突然报错"，而真正的行为应该是"立即停止"。
+	h.cancelUserRunningTurns(ctx, userID)
+
 	OK(w, accountDeletionStatus{
 		Status:        accountStatusPendingDeletion,
 		DueAt:         &dueAt,
@@ -177,6 +201,43 @@ func (h *AuthHandler) RequestAccountDeletion(w http.ResponseWriter, r *http.Requ
 		CanExport:     true,
 		CanCancel:     true,
 	})
+}
+
+// cancelUserRunningTurns 打断该用户在**本实例**上正在跑的回合。
+//
+// 只遍历 `sessionCancels`（进程内活跃表）而不查 sessions 表：
+//   - 后者包含全部历史会话（可能上百条），逐个走 cancelSessionRun 会产生
+//     N 次归属查询 + N 次广播，而其中绝大多数并没有在跑；
+//   - `sessionCancels` 恰好就是"此刻正在跑的回合"的权威集合。
+//
+// 跨副本的回合不在这里处理：那台副本会在下一次扣费时撞上余额不足
+// （冻结已把 credits 清零）自然停下，而 AccountDeletionGate 也已让该账号
+// 无法再发起任何新交互。为注销场景引入跨副本广播不值得 —— 收益是"早停几秒"，
+// 代价是给一条本已很少走的路径增加 N 次网络往返。
+func (h *AuthHandler) cancelUserRunningTurns(ctx context.Context, userID string) {
+	canceled := 0
+	sessionCancels.Range(func(key, value any) bool {
+		sc, ok := value.(*sessionCancel)
+		if !ok || sc == nil || sc.userID != userID {
+			return true
+		}
+		sid, _ := key.(string)
+		if sid == "" {
+			return true
+		}
+		if _, err := cancelSessionRun(ctx, h.sessionMgr, sid, userID); err != nil {
+			// 单个会话取消失败不该影响其它会话，也不该让注销申请失败。
+			slog.Warn("account deletion: cancel running turn failed",
+				"user_id", userID, "session", sid, "error", err)
+			return true
+		}
+		canceled++
+		return true
+	})
+	if canceled > 0 {
+		slog.Info("account deletion: cancelled running turns",
+			"user_id", userID, "count", canceled)
+	}
 }
 
 // ── 撤销注销 ──
@@ -311,6 +372,19 @@ func freezeUserAssets(ctx context.Context, userID string) (time.Time, error) {
 	}
 	if status != accountStatusActive {
 		return time.Time{}, fmt.Errorf("account is not active (status=%s)", status)
+	}
+
+	// 余额必须为 0 才能申请注销。
+	//
+	// 为什么要求先清零而不是"冻结后到期作废"：账上余额是用户已付费购买的
+	// 资产，直接作废等于没收；而注销后账号无法消费，留着又成了悬空余额
+	// （既不能花、也没有归属）。让用户在申请前自行用完或走退款，
+	// 责任与账目都清晰。
+	//
+	// 用 ErrDeletionBalanceNotZero 而非普通 error：handler 需要据此返回
+	// 可操作的提示（带当前余额），而不是笼统的 500。
+	if credits > 0 {
+		return time.Time{}, &deletionBalanceError{credits: credits}
 	}
 
 	state := deletionFreezeState{
@@ -539,3 +613,16 @@ func restoreUserAssets(ctx context.Context, userID string) error {
 
 // errAccountPurged 供上层区分"账号已清除"这种终态。
 var errAccountPurged = errors.New("account purged")
+
+// deletionBalanceError 表示"余额未清零，不能申请注销"。
+//
+// 单独成类型是因为 handler 要据此返回**可操作**的提示（带上当前余额，
+// 让用户知道还差多少），而不是笼统的 500。用字符串匹配判定错误类型
+// 在改动文案时就会静默失效。
+type deletionBalanceError struct {
+	credits int
+}
+
+func (e *deletionBalanceError) Error() string {
+	return fmt.Sprintf("account balance must be 0 before deletion (current: %d)", e.credits)
+}

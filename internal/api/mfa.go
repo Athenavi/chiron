@@ -289,10 +289,11 @@ func (h *AuthHandler) MFAVerify(w http.ResponseWriter, r *http.Request) {
 		recoveryRaw    []byte
 	)
 	err = db.GlobalDBManager.QueryRow(ctx,
-		`SELECT id, email, name, role, tenant_id, totp_enabled, totp_secret_enc, totp_recovery_hashes
+		`SELECT id, email, name, role, tenant_id, totp_enabled, totp_secret_enc, totp_recovery_hashes,
+		        COALESCE(account_status, 'active')
 		   FROM users WHERE id = $1`, userID).
 		Scan(&user.ID, &user.Email, &user.Name, &user.Role, &tenantID,
-			&totpEnabled, &secretEnc, &recoveryRaw)
+			&totpEnabled, &secretEnc, &recoveryRaw, &user.AccountStatus)
 	if err != nil {
 		if isNoRows(err) {
 			Unauthorized(w, "invalid or expired challenge")

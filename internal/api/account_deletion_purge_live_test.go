@@ -165,7 +165,15 @@ func TestLivePurgeSkipsNotYetDue(t *testing.T) {
 }
 
 // deletionRequestWithPwd 申请注销（这些用例的账号没设密码，confirm 即可）。
+//
+// ⚠ 先把余额清零：申请注销要求 `credits = 0`（门槛），而 liveSmokeFixture
+// 建的用户默认 credits=1000。不清零的话申请会被 400 拒绝，
+// 后面的"过期 → 清理"根本走不到，表现为莫名其妙的"处理了 0 个账号"。
 func deletionRequestWithPwd(t *testing.T, h *AuthHandler, userID string) *httptest.ResponseRecorder {
 	t.Helper()
+	if _, err := withP12Pool(t).Exec(context.Background(),
+		`UPDATE users SET credits = 0 WHERE id = $1`, userID); err != nil {
+		t.Fatalf("清零余额失败: %v", err)
+	}
 	return deletionRequest(t, h, userID, "")
 }

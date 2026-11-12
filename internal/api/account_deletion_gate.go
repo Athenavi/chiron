@@ -41,6 +41,13 @@ var accountDeletionAllowedPaths = map[string]map[string]bool{
 	"/v1/me/export":          {http.MethodGet: true},
 	"/v1/me/deletion":        {http.MethodGet: true},
 	"/v1/me/deletion/cancel": {http.MethodPost: true},
+	// GET /v1/auth/profile：前端每次进页面都会拉它拿权威身份与 account_status。
+	// 不放行的话，注销中的用户连"我处于什么状态"都读不到，
+	// 路由守卫会把他当成未登录而踢回登录页 —— 那样导出与撤销的入口就没了。
+	"/v1/auth/profile": {http.MethodGet: true},
+	// POST /v1/auth/logout：允许登录就必须允许登出。
+	// 否则用户被困在"已登录但什么都做不了"的状态里，连换账号都不行。
+	"/v1/auth/logout": {http.MethodPost: true},
 }
 
 // accountDeletionAllowedPrefixes 用于要下载的资产路径（媒体签名 URL 等）。

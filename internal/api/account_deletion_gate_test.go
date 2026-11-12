@@ -27,11 +27,15 @@ func TestDeletionGateAllowedPathsAreMinimal(t *testing.T) {
 		{http.MethodPost, "/v1/me/deletion/cancel"},
 		{http.MethodGet, "/media/s/abc123"},
 		{http.MethodHead, "/media/s/abc123"},
+		// 允许登录后必须能读自己的状态与登出，否则用户被困在
+		// "已登录但既看不到入口、也换不了账号"的状态里。
+		{http.MethodGet, "/v1/auth/profile"},
+		{http.MethodPost, "/v1/auth/logout"},
 	}
 	for _, tc := range allowed {
 		r := httptest.NewRequest(tc.method, tc.path, nil)
 		if !isDeletionAllowedRequest(r) {
-			t.Errorf("%s %s 应放行（导出/撤销/只读媒体是冻结期唯一允许的操作）", tc.method, tc.path)
+			t.Errorf("%s %s 应放行（导出/撤销/只读媒体/查状态/登出是冻结期允许的操作）", tc.method, tc.path)
 		}
 	}
 
@@ -41,7 +45,8 @@ func TestDeletionGateAllowedPathsAreMinimal(t *testing.T) {
 		{http.MethodPost, "/v1/uploads"},              // 不许再产生新数据
 		{http.MethodPost, "/media/s/abc123"},          // 写方法不放过
 		{http.MethodPost, "/v1/me/deletion"},          // 已申请再申请没有意义
-		{http.MethodPut, "/v1/auth/profile"},          // 改资料：不是导出
+		{http.MethodPut, "/v1/auth/profile"},          // 改资料：不是导出（只放行 GET）
+		{http.MethodGet, "/v1/auth/logout"},           // 登出只接受 POST
 		{http.MethodGet, "/v1/me/deletion/cancel"},    // 撤销只接受 POST
 		{http.MethodDelete, "/v1/me/export"},          // 方法不匹配
 	}

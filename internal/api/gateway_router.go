@@ -259,6 +259,8 @@ func NewGatewayRouter(
 	// Auth
 	authenticator := auth.NewAuthenticator(cfg.JWTSecret, cfg.JWTExpiration)
 	authHandler := NewAuthHandler(cfg)
+	// 注销冻结时要打断该用户正在跑的回合（见 cancelUserRunningTurns）。
+	authHandler.SetSessionManager(sessionMgr)
 	// 闸门串在鉴权**之后**：它需要 claims 里的 userID。
 	// 放在这里而不是逐条路由包：全仓 200+ 条鉴权路由，逐条加必漏；
 	// 新增路由默认受管，而不是默认漏管。

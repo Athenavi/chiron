@@ -25,8 +25,19 @@ logger = logging.getLogger(__name__)
 # P2-1: 消息压缩策略调优 (生产安全检查 2026-08-17)
 # 原值过于激进：MAX_CONTEXT_TOKENS=4000 (仅 GPT-4 的 1/4), MAX_MESSAGES=8
 # 新值根据模型能力调整，支持租户级覆盖
-MAX_CONTEXT_TOKENS = 8192  # 增加到 8K tokens (约 GPT-4 的 1/10)
-MAX_MESSAGES = 16  # 增加到 16 条消息
+# 上下文预算兜底值（`llm_models.context_window` 查不到时才用，见 model_window.py）。
+# 旧值 8192 是"GPT-4 的 1/10"时代的保守数；现代模型窗口普遍 ≥128K，用 8K 判定
+# 会让**每个会话都在几轮内触顶**。这里与 `model_window.DEFAULT_CONTEXT_WINDOW` 同口径。
+MAX_CONTEXT_TOKENS = 128000
+# 消息条数**保险丝**，不是常规压缩手段。
+#
+# 旧值 16 是"频繁压缩"的直接原因：一次工具往返 = 2 条消息（assistant(tool_calls) + tool），
+# 16 条 ≈ 7 次工具调用就到顶，之后**每一轮**都会触发一次 prune 并推一条 compaction 事件，
+# 用户看到的就是"上下文一直在被压缩"。
+#
+# 业界主流（Claude Code、deepagents 等）都是 **token 主导、条数只做极端兜底**：
+# 200 条约等于 100 次工具往返，正常任务远够用；真正该裁的时候由 token 阈值说了算。
+MAX_MESSAGES = 200
 SNIP_THRESHOLD = 0.70  # 70% 才开始压缩 (原 60%)
 PRUNE_THRESHOLD = 0.85  # 85% 才裁剪旧消息 (原 80%)
 TOOL_RESULT_MAX_CHARS = 16000  # 增加到 16K chars (原 8K)
@@ -66,6 +77,13 @@ class CompactionConfig:
     tool_result_max_chars: int = TOOL_RESULT_MAX_CHARS
     tool_result_head: int = TOOL_RESULT_HEAD
     tool_result_tail: int = TOOL_RESULT_TAIL
+    #: prune 之后的**目标占用比例**（相对 `max_context_tokens`）。
+    #:
+    #: 只按条数裁剪是"压缩频繁触发"的第二个来源：token 到 85% 触发 prune 时，
+    #: 若仍保留最近 `max_messages` 条，token 几乎没降，下一轮立刻再次触顶。
+    #: 这里让裁剪真的收敛到目标水位，给后续回合留出缓冲。
+    #: 必须低于 `threshold_ratio`，否则压完仍在触发线上。
+    keep_ratio: float = 0.5
     #: C2 段 c：历史工具调用参数的最大字符数（超长则保留 JSON 骨架 + 截断字符串值）。
     #: 0 = 不截断。老消息的大 args 会**每轮重发**，这是纯浪费。
     arg_max_chars: int = ARG_MAX_CHARS
@@ -317,6 +335,29 @@ def _prune_messages(
     # （前面不是带 tool_calls 的 assistant），向前扩展到其配对的
     # assistant(tool_calls)，保证 API 配对完整、工具结果不丢失
     start = max(0, len(processed) - budget)
+
+    # ── 再按 **token 水位** 收敛（只按条数裁是"压缩频繁触发"的第二个来源）──
+    #
+    # 达到 token 阈值而触发的 prune，若仍保留最近 `max_messages` 条，占用几乎没降：
+    # 下一轮估算仍在上限之上，于是**每回合都压一次**、每回合都推一条 compaction 事件。
+    # 从最新往前累加，累计到 `max_context_tokens * keep_ratio` 即停，让裁剪真的收敛到
+    # 触发线以下，给后续若干回合留出缓冲。
+    #
+    # `max_context_tokens <= 0` 时跳过：那是"用模型窗口表"的哨兵值，本函数拿不到真实
+    # 预算，此时保持原有的纯条数裁剪（显式配置了 max_messages 的调用方也走这条路）。
+    if cfg.max_context_tokens > 0 and cfg.keep_ratio > 0:
+        target = int(cfg.max_context_tokens * cfg.keep_ratio)
+        acc = 0
+        token_start = len(processed) - 1
+        for idx in range(len(processed) - 1, -1, -1):
+            acc += _estimate_tokens([processed[idx]], cfg.model)
+            token_start = idx
+            if acc >= target:
+                break
+        # 至少保留最后一条：那是本轮的用户输入，裁掉模型就无从作答了。
+        token_start = min(token_start, len(processed) - 1)
+        # 两个起点取靠后的那个 —— 下标越大，保留得越少。
+        start = max(start, token_start)
     # 起点本身是 tool 时，其配对的 assistant 可能在 kept 之外，先补一位
     if start < len(processed) and processed[start].get("role") == "tool" and start > 0:
         start -= 1

@@ -58,6 +58,19 @@ func registerAdminRoutes(
 	mux.Handle("GET /v1/tenant/usage/catalog", authMW(rlMW(adminReadMW(http.HandlerFunc(adminHandler.GetTenantUsageCatalog)))))
 	// 新用户引导漏斗（P0-3 验收「完成率可查」）—— 只读统计，与其它 admin 读端点同口径。
 	mux.Handle("GET /v1/admin/onboarding/funnel", authMW(rlMW(adminReadMW(adminStrip))))
+	// 注销归档的运维/合规通道。
+	//
+	// 权限用 **platformReadMW**（平台 owner）而非 adminReadMW：
+	// 归档是完整的个人数据快照（邮箱/手机/会话/流水/支付），
+	// 而 `admin:read` 是**租户** admin 就持有的权限 ——
+	// 沿用它会变成"任何租户管理员都能读别的租户已注销用户的全部历史"。
+	//
+	// 不走 adminStrip：handler 直接读 PathValue，绕一层 StripPrefix
+	// 只会让路径参数来源变得不直观。
+	mux.Handle("GET /v1/admin/account-archives/{user_id}",
+		authMW(rlMW(platformReadMW(http.HandlerFunc(adminHandler.ListAccountArchives)))))
+	mux.Handle("GET /v1/admin/account-archives/{user_id}/{file}",
+		authMW(rlMW(platformReadMW(http.HandlerFunc(adminHandler.DownloadAccountArchive)))))
 	mux.Handle("POST /v1/admin/maintenance", authMW(rlMW(platformWriteMW(adminStrip))))
 	mux.Handle("GET /v1/admin/kb", authMW(rlMW(adminReadMW(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if pythonClient == nil || !pythonClient.IsConnected() {

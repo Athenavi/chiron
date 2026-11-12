@@ -54,6 +54,9 @@ type ssoUser struct {
 	Email string
 	Name  string
 	Role  string
+	// AccountStatus 用于把注销状态带出查询；SSO 回调是 302 重定向、
+	// 没有 JSON 响应体，前端后续靠 /v1/auth/profile 拿权威状态。
+	AccountStatus string
 }
 
 // sanitizeProvider 构造 provider 的对外响应：client_secret 一律脱敏。
