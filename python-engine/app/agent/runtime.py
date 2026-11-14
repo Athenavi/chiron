@@ -281,17 +281,17 @@ def _normalize_msg(
 
 
 def _render_plan_block(todos: list[dict[str, Any]]) -> str:
-    """把看板渲染成注入 system 段的**计划块**。
+    """把看板渲染成**计划块**（由尾部提醒每轮带给模型）。
 
-    为什么要注入 system 段，而不是只靠 `todo_write` 的 tool_result 回显：
+    为什么不只靠 `todo_write` 的 tool_result 回显：
 
     * tool_result 会被压缩裁掉（`compaction._prune_messages` 对 tool 消息做截断，
       更旧的整段淘汰），**计划是长任务里唯一"不能被裁"的东西** —— 裁掉之后模型
       就真的忘了自己在干什么，然后在剩下的轮次里从头重做。
-    * system 段在所有压缩路径下都原样保留（`_prune_messages` 第一件事就是把
-      `role == "system"` 摘出来）。放这里 = 免费获得保护，不需要给压缩器开后门。
-    * 位置在稳定前缀**之后**的独立 system 消息：前缀缓存按"逐字相同的最长前缀"
-      命中，把它放后面，计划每轮变化只让这一条之后失效，主体提示词仍命中。
+    * 尾部提醒在**压缩之后**才拼上（见循环里的 `_with_tail_reminder`），所以它天然
+      不在任何压缩路径的作用范围内，不必给压缩器开后门。
+    * 它**不进 system 段**：system 段每轮变一次，前缀缓存就从那条消息起整段失效；
+      放在消息尾部，稳定前缀逐字不变，缓存照常命中。
 
     对照实现：Cline 的 Focus Chain 把清单写进 `.clinerules` 并在每轮重述；
     Claude Code 的 TodoWrite 靠工具回显 + 上下文自愈。这里取两者之间 ——
@@ -323,7 +323,6 @@ def _apply_system_prefix(
     *,
     extra_suffix: str = "",
     controls_suffix: str = "",
-    plan_block: str = "",
 ) -> list[dict[str, Any]]:
     """把 messages 的 system 段**重新定形**为「稳定前缀 + 记忆」。
 
@@ -382,10 +381,9 @@ def _apply_system_prefix(
     report_context = getattr(task, "report_context", "") or ""
     if report_context:
         prefix.append(_normalize_msg(role="system", content=report_context))
-    # 当前计划。**放在 system 段最末** —— 它每轮都可能变（状态推进），
-    # 越靠后，被它打破的前缀缓存越少。空串 ⇒ 未写过清单 ⇒ 这里零行为变化。
-    if plan_block:
-        prefix.append(_normalize_msg(role="system", content=plan_block))
+    # 当前计划与原始目标**都不进 system 段** —— 它们走消息尾部的 `goal_context` 提醒
+    # （见主循环里的 `_goal_context.with_reminder`）。原因：system 段每轮变一次，前缀缓存
+    # 就从那条消息起整段失效；放尾部则稳定前缀逐字不变，缓存照常命中。
     return prefix + rest
 
 
@@ -1646,6 +1644,7 @@ class AgentRuntime:
         tools: list[dict[str, Any]] | None,
         on_overflow: Callable[[], list[dict[str, Any]]],
         overflow_flags: list[dict[str, Any]],
+        tail_reminder: str = "",
     ) -> AsyncIterator[Any]:
         """流式调用 LLM；遇**上下文溢出**时强制压缩并重试一次（C2 段 b）。
 
@@ -1660,9 +1659,18 @@ class AgentRuntime:
         attempt = 0
         while True:
             try:
+                # 尾部提醒只拼在**发出去的那一份**上，不写回 `messages`：
+                # `messages` 会被 `session_store.append`（整表覆盖写）与 checkpoint 快照
+                # 落盘，把提醒留在里面等于把"引擎的内部提示"写进用户可见的会话历史 ——
+                # 下一轮再从历史里读回来，它就成了用户说过的话。
+                payload = messages
+                if tail_reminder:
+                    from app.agent import goal_context as _goal_context
+
+                    payload = _goal_context.with_reminder(messages, tail_reminder)
                 async for chunk in self._gateway.chat_stream(
                     # 中立格式 → gateway ChatMessage（provider 边界适配）
-                    messages=_to_chat_messages(messages),
+                    messages=_to_chat_messages(payload),
                     model=model,
                     provider_hint=provider_hint,
                     tenant_id=tenant_id,
@@ -2108,6 +2116,13 @@ class AgentRuntime:
 
             _out_style, _out_lang, _out_think_lang = resolve_controls(task.llm_config)
             _controls_suffix = build_controls_suffix(_out_style, _out_lang, _out_think_lang)
+            # 原始目标与意图：**本 run 只提炼一次**。每轮重新从 messages 里找是不行的 ——
+            # 压缩会改写/裁掉历史里的首条 user 消息，跑到后半程就找不到原本那句了，
+            # 而那恰好是最需要它的时候。注入点不在这里，而在主循环尾部的
+            # `goal_context.with_reminder`（见下方"每轮拼尾部提醒"）。
+            from app.agent import goal_context as _goal_context
+
+            _goal_ctx = _goal_context.build(messages, task)
             messages = _apply_system_prefix(
                 messages,
                 task,
@@ -2472,7 +2487,6 @@ class AgentRuntime:
                     task,
                     extra_suffix=_extra_suffix,
                     controls_suffix=_controls_suffix,
-                    plan_block=plan_block,
                 )
 
                 # ── 分级压缩：根据 token 使用量选择压缩策略（SaaS：策略可配）──
@@ -2505,6 +2519,17 @@ class AgentRuntime:
                     if m.get("role") == "assistant":
                         last_tc = bool(m.get("tool_calls"))
                 messages = clean
+
+                # ── 每轮生成**尾部提醒**：原始目标 + 意图线索 + 当前计划 ──
+                #
+                # 位置是刻意的 —— 必须在压缩（`_compact_with_notice`）与 orphan 清理
+                # **之后**：提醒要描述"这一轮真正发给模型的东西"，而不是被压缩前的快照；
+                # 也正因为排在压缩之后，它天然不会被截断或淘汰，不需要给压缩器开后门。
+                #
+                # 它**只是字符串**，由 `_chat_stream_with_retry` 拼在发往 provider 的那一份上：
+                # 不写回 `messages`，所以既不影响前缀缓存（稳定前缀逐字不变），也不会被
+                # `session_store.append` / checkpoint 快照落成"用户说过的话"。
+                tail_reminder = _goal_ctx.render(plan_block)
 
                 # 调用 LLM (带 trace span 记录)
                 response_content = ""
@@ -2551,6 +2576,7 @@ class AgentRuntime:
                         folds=overflow_folds,
                     ),
                     overflow_flags=overflow_flags,
+                    tail_reminder=tail_reminder,
                 ):
                     # DeepSeek thinking mode 思考过程
                     if chunk.reasoning_content:
