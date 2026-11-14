@@ -52,8 +52,19 @@ CORE_TOOL_NAMES = frozenset(
         "read_file",  # 读取文件
         "ls",  # 列目录（非递归）
         "write_file",  # 写入/保存文件
+        # 精确查找替换：**这是长任务的默认编辑方式**。此前它只在 MINIMAL 模式可见，
+        # normal 模式下的模型只剩"整篇 write_file"一条路 —— 改一行也要重写全文，
+        # 既烧 output token，又必然撞上 max_tokens 截断（半截 JSON ⇒ 工具被拒 ⇒ 重试
+        # ⇒ 又被 loop_guard 当重复调用拦住）。缺它不是"少一个便利工具"，是**少了唯一的
+        # 低风险编辑路径**。
+        "edit_file",  # 精确编辑（old_string→new_string / 行范围替换）
         "delete_file",  # 删除文件（delete 级：需人工确认 + 二次校验）
         "grep_files",  # 搜索文件
+        # 任务清单：长任务的"计划"必须能被模型自己读写。此前它不在这个白名单里，
+        # normal 模式**只经 tool_search 才可能拿到** —— 模型压根不知道有这个工具，
+        # 于是"读用户那条 todo_write 问题反馈"就变成了"工具不存在"。而增量更新、
+        # 未完成阻断（P1-1/P1-2）全都以它为前提。
+        "todo_write",  # 维护任务清单（分步计划 / 进度）
         "media_create",  # 产出可下载的资产（媒体库；含二进制——见 app/tools/media.py）
         "subagent",  # 子 agent 委派（多 agent 协作核心）
         "use_capability",  # P7：外部能力（MCP / 插件）的单一代理入口

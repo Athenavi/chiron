@@ -3,12 +3,12 @@ package api
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/athenavi/chiron/config"
@@ -433,9 +433,37 @@ func (h *SubmitHandler) saveGoal(ctx context.Context, g agentgoal.Goal) {
 // workbenchCtx 是前端组装的工作台上下文（kb_id / agent / skill_names），
 // 透传给引擎消费 —— 网关不再丢弃它。
 func (h *SubmitHandler) submitOnce(ctx context.Context, userID, sessionID, content string, llmConfig, workbenchCtx map[string]interface{}, attachments []map[string]interface{}) *agentgoal.Report {
-	// P1 修复：与 Python 引擎 5min 客户端超时对齐，避免长任务被 180s 硬超时截断
-	ctx, cancel := context.WithTimeout(ctx, DefaultAgentTimeout)
+	// P1 修复：与 Python 引擎 5min 客户端超时对齐，避免长任务被 180s 硬超时截断。
+	//
+	// **语义已从"总时长"改为"空闲时长"**（长任务必须活下来的前提）：
+	// 旧写法 `context.WithTimeout(ctx, DefaultAgentTimeout)` 是**总时长**闸门 ——
+	// 不管引擎在干什么，到点就砍。而一个正常的长任务（几十轮工具调用）本来就要跑
+	// 十几分钟，于是它必然死在 300s 上，且连带取消该会话的后台子 Agent（见下面
+	// `ctx.Err()` 那段注释）。"轮数太保守导致跑不完"的另一半根因就在这里。
+	//
+	// 现在：只要引擎**还在产出事件**就续命；连续 `DefaultAgentTimeout` 没有任何事件
+	// 才判定"卡死"并取消。真正的长度上限交给引擎侧的预算三轴
+	// （`AGENT_RUN_MAX_TOKENS` / `AGENT_MAX_STEPS` / `AGENT_MAX_SECONDS`）——
+	// 那里知道"这一轮在做什么"，这里只知道"有没有动静"，后者不该替前者做决定。
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+
+	// 空闲看门狗：连续 `DefaultAgentTimeout` **没有任何事件**才判定卡死。
+	//
+	// 为什么用 `AfterFunc` + 手动 `Reset` 而不是 `context.WithTimeout`：
+	// 后者只能设一次固定截止时间，无法"每收到事件就续命"；而长任务的
+	// 特征恰恰是"总时长很长、但中间一直在动"。这里每收到一个事件就重置
+	// 计时器，于是判据变成"有没有动静"——这正是网关这一层**有资格**判断的事。
+	//
+	// `idleExpired` 必须单独记：`cancel()` 产生的错误是 `context.Canceled`，
+	// 与用户主动停止、前端断线无法区分；而下面的留痕与终态需要把"卡死超时"
+	// 与"用户停止"分开（否则用户会看到一条莫名其妙的 timeout 记录）。
+	var idleExpired atomic.Bool
+	idleTimer := time.AfterFunc(DefaultAgentTimeout, func() {
+		idleExpired.Store(true)
+		cancel()
+	})
+	defer idleTimer.Stop()
 	// session 亲和：同 session 的所有流式轮次固定路由到同一引擎实例
 	// （引擎 PersistentTerminal/后台任务/簿记为进程内状态，round-robin 跨实例会断链）
 	ctx = engine.WithSession(ctx, sessionID)
@@ -719,6 +747,9 @@ func (h *SubmitHandler) submitOnce(ctx context.Context, userID, sessionID, conte
 	}
 
 	for evt := range events {
+		// 心跳：只要引擎还在产出事件就续命（空闲超时的判据是"没动静"，不是"总时长长"）。
+		// 放在循环最前面：任何类型的事件都算"活着"，包括 tool_call/tool_result/thinking。
+		idleTimer.Reset(DefaultAgentTimeout)
 		// 思考事件（[thinking] 前缀）不参与合帧：过程性内容需即时逐段推送，
 		// 否则毫秒级到达的 thinking 片段会被 50ms 合帧合并成整段（思考不流式）。
 		isThinking := strings.HasPrefix(evt.Content, "[thinking]")
@@ -816,18 +847,19 @@ func (h *SubmitHandler) submitOnce(ctx context.Context, userID, sessionID, conte
 	flushText()     // 流结束兜底冲刷
 	saveDraft(true) // 定型：覆盖正常结束、被取消、断线等所有路径
 
-	// 可观测性：区分"正常结束"与三种中断（前端断开 / 会话取消 / DefaultAgentTimeout 超时）。
+	// 可观测性：区分"正常结束"与三种中断（前端断开 / 会话取消 / 空闲超时）。
 	//
-	// 关键是**超时必须被当成异常**：在此之前它只记一条 slog.Info，于是 300s 的静默截断
-	// 在日志里和"正常结束"长得一模一样，前端也只看到流关闭、拿不到任何原因 ——
-	// 用户侧的表现就是"这轮莫名结束了"。而它还会**连带取消该会话的后台子 Agent**
-	// （引擎收到 CancelledError → cancel_session），那些子 Agent 的结论因此永远回不到主对话。
+	// 关键是**超时必须被当成异常**：静默截断在日志里和"正常结束"长得一模一样，
+	// 前端也只看到流关闭、拿不到任何原因 —— 用户侧的表现就是"这轮莫名结束了"。
+	// 而它还会**连带取消该会话的后台子 Agent**（引擎收到 CancelledError → cancel_session），
+	// 那些子 Agent 的结论因此永远回不到主对话。
 	if err := ctx.Err(); err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
+		if idleExpired.Load() {
 			slog.Warn(
-				"submit turn truncated by deadline; this session's sub-agents were cancelled, "+
-					"so their conclusions will NOT reach the conversation",
-				"session_id", sessionID,
+				"submit turn aborted: engine produced no events within the idle window; "+
+					"this session's sub-agents were cancelled, so their conclusions will NOT "+
+					"reach the conversation",
+				"session_id", sessionID, "idle_window", DefaultAgentTimeout.String(),
 			)
 		} else {
 			slog.Info("submit stream ended with cancellation",
@@ -921,7 +953,7 @@ func (h *SubmitHandler) submitOnce(ctx context.Context, userID, sessionID, conte
 		sink.Add(usage.input + usage.output)
 	}
 
-	// 回合终态收敛：取消(断开/超时) -> cancelled；引擎报错 -> failed；否则 completed。
+	// 回合终态收敛：取消(断开/空闲超时) -> cancelled；引擎报错 -> failed；否则 completed。
 	turnStatus := "completed"
 	switch {
 	case ctx.Err() != nil:
@@ -937,10 +969,11 @@ func (h *SubmitHandler) submitOnce(ctx context.Context, userID, sessionID, conte
 	// **断线 / 会话取消 / 超时**这三种中断，用户侧**看不到任何痕迹**，刷新后更没有
 	// （`stopped` 是纯前端字段、不入库）。落一条 `tool_name='interrupted'` 的记录 ⇒
 	// 前端投影渲染成 notice 行（刷新后仍可追溯）。
-	// 区分超时与其它取消：`ctx.Err()` 只会有 `Canceled` / `DeadlineExceeded` 两种取值。
+	// 区分超时与其它取消：外层 ctx 的 `Err()` 只有 `Canceled` 一种取值了（总时长
+	// 闸门已改为空闲看门狗），所以"是不是我们判的卡死"只能看 `idleExpired`。
 	if turnStatus == "cancelled" {
 		reason := "cancelled"
-		if ctx.Err() == context.DeadlineExceeded {
+		if idleExpired.Load() {
 			reason = "timeout"
 		}
 		h.sessionMgr.SaveToolCall(storeCtx, sessionID,

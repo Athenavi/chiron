@@ -19,7 +19,13 @@ import (
 // P0性能优化：集中管理超时常量，避免散落各处的魔法数字
 const (
 	DefaultAgentTimeout = 300 * time.Second
-	DefaultMaxTurns     = 5
+	// DefaultMaxTurns 单次 run 的回合上限（**兜底**，真正的闸门是引擎侧的
+	// `AGENT_MAX_STEPS` / `AGENT_RUN_MAX_TOKENS` 预算三轴）。
+	//
+	// 旧值 5 与引擎 `max_turns=10` 叠加后，长任务在第 5 轮就被静默截断 ——
+	// 而 checkpoint 续跑又被夹到 `max_turns-1`，整套续跑基建等于作废。
+	// 长任务需要的是"预算到限才停"，不是"轮数到限就停"。
+	DefaultMaxTurns = 50
 	// DefaultMaxOutputTokens 单次 LLM 调用的默认 max output tokens。
 	//
 	// M20：它不是 run 预算 —— run 全程的 token 上限在引擎侧（`AGENT_RUN_MAX_TOKENS`）。

@@ -25,7 +25,7 @@ class AgentDispatchRequest(BaseModel):
     system_prompt: str = ""
     tools: list[dict[str, Any]] = []
     model: str = ""
-    max_turns: int = 5
+    max_turns: int = 50
     max_tokens: int = 4096
     temperature: float = 0.7
     tenant_id: int = 0
@@ -79,7 +79,7 @@ async def dispatch_agent(body: AgentDispatchRequest) -> dict[str, Any]:
             tools=body.tools or None,
             gateway=gateway,
             model=body.model or "deepseek-chat",
-            max_turns=body.max_turns or 5,
+            max_turns=body.max_turns or 50,
             max_tokens=body.max_tokens or 4096,
             temperature=body.temperature or 0.7,
         )

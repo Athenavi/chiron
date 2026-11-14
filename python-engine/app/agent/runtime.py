@@ -280,12 +280,50 @@ def _normalize_msg(
     )
 
 
+def _render_plan_block(todos: list[dict[str, Any]]) -> str:
+    """把看板渲染成注入 system 段的**计划块**。
+
+    为什么要注入 system 段，而不是只靠 `todo_write` 的 tool_result 回显：
+
+    * tool_result 会被压缩裁掉（`compaction._prune_messages` 对 tool 消息做截断，
+      更旧的整段淘汰），**计划是长任务里唯一"不能被裁"的东西** —— 裁掉之后模型
+      就真的忘了自己在干什么，然后在剩下的轮次里从头重做。
+    * system 段在所有压缩路径下都原样保留（`_prune_messages` 第一件事就是把
+      `role == "system"` 摘出来）。放这里 = 免费获得保护，不需要给压缩器开后门。
+    * 位置在稳定前缀**之后**的独立 system 消息：前缀缓存按"逐字相同的最长前缀"
+      命中，把它放后面，计划每轮变化只让这一条之后失效，主体提示词仍命中。
+
+    对照实现：Cline 的 Focus Chain 把清单写进 `.clinerules` 并在每轮重述；
+    Claude Code 的 TodoWrite 靠工具回显 + 上下文自愈。这里取两者之间 ——
+    有文件式的确定性（不依赖压缩），又不必落盘（Redis 看板已是唯一真相）。
+    """
+    if not todos:
+        return ""
+    marks = {"pending": "[ ]", "in_progress": "[~]", "completed": "[x]"}
+    done = sum(1 for t in todos if t.get("status") == "completed")
+    lines = [
+        "<current-plan>",
+        f"进度：{done}/{len(todos)} 已完成。这是你**自己**写的任务清单，"
+        "按它推进；每完成一项立刻用 todo_write 更新状态。",
+    ]
+    for item in todos:
+        status = str(item.get("status", "pending"))
+        mark = marks.get(status, "[ ]")
+        sid = str(item.get("id", "") or "")
+        content = str(item.get("content", "") or "")
+        suffix = f" ({sid})" if sid else ""
+        lines.append(f"{mark} {content}{suffix}")
+    lines.append("</current-plan>")
+    return "\n".join(lines)
+
+
 def _apply_system_prefix(
     messages: list[dict[str, Any]],
     task: AgentTask,
     *,
     extra_suffix: str = "",
     controls_suffix: str = "",
+    plan_block: str = "",
 ) -> list[dict[str, Any]]:
     """把 messages 的 system 段**重新定形**为「稳定前缀 + 记忆」（C2/D2 的统一落点）。
 
@@ -344,6 +382,10 @@ def _apply_system_prefix(
     report_context = getattr(task, "report_context", "") or ""
     if report_context:
         prefix.append(_normalize_msg(role="system", content=report_context))
+    # 当前计划（P1-1）。**放在 system 段最末** —— 它每轮都可能变（状态推进），
+    # 越靠后，被它打破的前缀缓存越少。空串 ⇒ 未写过清单 ⇒ 这里零行为变化。
+    if plan_block:
+        prefix.append(_normalize_msg(role="system", content=plan_block))
     return prefix + rest
 
 
@@ -1200,7 +1242,93 @@ class AgentRuntime:
             await result_store.store(session_id, ref, text)
         logger.info("compaction dropped content persisted: count=%d", len(dropped))
 
-    async def _persist_folds(self, folds: list[dict[str, Any]], task: AgentTask) -> None:
+    #: 折叠摘要重写时，最多取回多少条原文。折叠区间可能有几百条，全取回等于把
+    #: 刚裁掉的上下文再灌一遍 —— 摘要的价值是"压缩"，取头尾代表就够。
+    _FOLD_DIGEST_MAX_MESSAGES = 12
+    #: 单条原文取回上限（字符）。足够看清这段在做什么，又不会让摘要 prompt 超窗。
+    _FOLD_DIGEST_MSG_CHARS = 1200
+
+    async def _summarize_fold(self, parts: list[str], task: AgentTask, model: str) -> str:
+        """把折叠区间的原文片段压成一段要点摘要。
+
+        提示词刻意要求"保留已完成的事、关键路径/命令、未完成的决定"：折叠区间的
+        用途是**让后续回合继续干活**，而不是做会议纪要。丢掉文件名与命令的摘要
+        等于把上下文删了还留下"我们讨论过某事"这种无用记录。
+        """
+        body = "\n\n---\n\n".join(parts)
+        prompt = (
+            "下面是被压缩掉的较早对话片段。请把它压成一份后续可继续工作的要点摘要。\n"
+            "必须保留：已经完成的事、涉及的文件路径/命令/接口名、尚未完成的决定与约束。\n"
+            "不要臆造片段里没有的信息。用中文，条目式，不超过 300 字。\n\n"
+            f"{body}"
+        )
+        buf: list[str] = []
+        async for chunk in self._gateway.chat_stream(
+            messages=_to_chat_messages([{"role": "user", "content": prompt}]),
+            model=model,
+            tenant_id=getattr(task, "tenant_id", 0) or 0,
+            provider_hint=str((getattr(task, "llm_config", {}) or {}).get("provider", "") or ""),
+            max_tokens=600,
+            temperature=0.2,
+        ):
+            if chunk.content:
+                buf.append(chunk.content)
+        return "".join(buf).strip()
+
+    async def _upgrade_fold_digests(
+        self, folds: list[dict[str, Any]], task: AgentTask, model: str
+    ) -> None:
+        """P2-1：把提取式摘要升级为**模型摘要**，就地改写 `folds`。
+
+        **为什么放在落库前而不是压缩时**：`_prune_messages` 是同步纯函数（还被当作
+        `on_overflow` 同步回调传入），接不了 await；而摘要必须调模型。所以压缩先写
+        一条可用的提取式摘要保底，落库前在这里异步换成真摘要 —— 换失败就保留原样，
+        库里始终有一条**诚实标注来源**的摘要（`digest_model`）。
+
+        原文从 `messages` 表按 id 取回，而不是从内存：此时 `messages` 里的那几条
+        已经被裁掉了，内存里根本没有了。取不回来（无 DB / 无留存策略）就跳过。
+        """
+        if not folds or not model:
+            return
+        # **默认不调模型**（`FOLD_DIGEST_LLM` 默认关）：本地提取式摘要已够用，
+        # 而压缩在长任务里会反复发生，每次多打一轮云请求与"能本地解决就别上云"冲突。
+        if not settings.fold_digest_llm:
+            return
+        session_id = getattr(task, "session_id", "") or ""
+        tenant_id = getattr(task, "tenant_id", 0) or 0
+        if not session_id or tenant_id <= 0:
+            return
+
+        from app.agent import history_writer
+
+        for fold in folds:
+            ids = fold.get("covered_ids") or []
+            if not ids:
+                continue
+            parts: list[str] = []
+            for mid in ids[: self._FOLD_DIGEST_MAX_MESSAGES]:
+                got = await history_writer.load_message_content(
+                    session_id, tenant_id, str(mid), offset=0, limit=self._FOLD_DIGEST_MSG_CHARS
+                )
+                if got and got[0].strip():
+                    parts.append(got[0])
+            if not parts:
+                continue
+            try:
+                digest = await self._summarize_fold(parts, task, model)
+            except Exception as exc:  # noqa: BLE001 — 摘要升级是优化项
+                logger.warning("fold digest upgrade failed (session=%s): %s", session_id, exc)
+                continue
+            if digest:
+                fold["digest"] = digest
+                # `digest_model` 从 `"extractive"` 变成真实模型名 —— 读方据此判断
+                # 这份摘要是模型写的还是首行拼接的。这正是该字段存在的意义。
+                fold["digest_model"] = model
+                fold["digest_prompt"] = "fold-summary"
+
+    async def _persist_folds(
+        self, folds: list[dict[str, Any]], task: AgentTask, *, model: str = ""
+    ) -> None:
         """把折叠区间记进 `session_folds`：库里要留下"这段被折叠过"的痕迹。
 
         与 `_persist_dropped` 同因放在 async 层：压缩链是同步纯函数。
@@ -1208,6 +1336,8 @@ class AgentRuntime:
         """
         if not folds:
             return
+        # P2-1：落库前把提取式摘要换成模型摘要（失败保留原样，见该函数）
+        await self._upgrade_fold_digests(folds, task, model)
         try:
             from app.agent import history_writer
 
@@ -1767,11 +1897,12 @@ class AgentRuntime:
             from app.agent.output_controls import build_controls_suffix, resolve_controls
 
             _out_style, _out_lang, _out_think_lang = resolve_controls(task.llm_config)
+            _controls_suffix = build_controls_suffix(_out_style, _out_lang, _out_think_lang)
             messages = _apply_system_prefix(
                 messages,
                 task,
                 extra_suffix=_extra_suffix,
-                controls_suffix=build_controls_suffix(_out_style, _out_lang, _out_think_lang),
+                controls_suffix=_controls_suffix,
             )
 
             tools = (
@@ -1852,7 +1983,7 @@ class AgentRuntime:
                     folds=compaction_folds,
                 )
                 await self._persist_dropped(compaction_dropped, task)
-                await self._persist_folds(compaction_folds, task)
+                await self._persist_folds(compaction_folds, task, model=model)
                 if compaction_notice is not None:
                     yield compaction_notice
 
@@ -1860,8 +1991,11 @@ class AgentRuntime:
             _thinking_last_flushed = (
                 0  # 跨 turn 持久化，跟踪已向前端发送的 reasoning_content
             )
-            _last_reasoning = ""  # 保存最后轮次的思考内容，用于兜底输出
+            _last_reasoning = ""  # 保存最后轮次的思考内容（仅用于日志，不再当答案）
             _answered = False  # 是否已产生最终回答
+            # 循环变量兜底初始化：`max_turns` 为 0 时 `for` 一次都不进，出口处
+            # `turn + 1` 会 NameError（done 事件与轮尽判定都要用它）。
+            turn = -1
             _cache_saved = False  # S 修复：缓存是否已保存（finally 兜底）
             from app.agent.interrupt import is_interrupted
 
@@ -1950,6 +2084,14 @@ class AgentRuntime:
                     + total_input_tokens
                     + total_output_tokens
                 )
+
+            # P1-2：清单未完成时的"推回去继续"次数上限。
+            #
+            # 为什么需要上限：这道闸门本身是可以被模型刷的 —— 它只要反复声称"做完了"
+            # 就能把回合数耗在"提醒-再声明"的循环里，而真正的硬闸门（预算 / 轮数）
+            # 反而永远不触发。给 3 次：足够纠正"做完 2/8 就收工"，又不至于把一次
+            # 误判变成无限对拉。
+            plan_reminder_budget = 3
 
             for turn in range(start_turn, task.max_turns):
                 # 差距C：本轮在**执行图**里的节点 id（llm / tool 调用都挂在它下面）。
@@ -2087,6 +2229,30 @@ class AgentRuntime:
                     )
                     for m in messages
                 ]
+
+                # ── P1-1：每轮把**当前计划**重新注入 system 段 ──
+                #
+                # 计划是长任务里唯一"不能被裁"的东西：tool_result 回显会被压缩截断/淘汰
+                # （`_prune_messages` 对 tool 消息做 head/tail 截断，更旧的整段丢掉），
+                # 而 system 段在所有压缩路径下原样保留 —— 它第一件事就是把 system 摘出来。
+                # `_apply_system_prefix` 是幂等的（先摘掉全部 system 再按序插），所以每轮
+                # 重算不会累积；看板读不到（Redis 瞬断）时它回落到进程内副本，读空则
+                # plan_block 为空串 ⇒ system 段与改动前逐字相同，零行为变化。
+                from app.agent import taskboard as _taskboard
+
+                _board = await _taskboard.load()
+                _raw_todos = _board.get("todos")
+                _board_todos: list[dict[str, Any]] = (
+                    _raw_todos if isinstance(_raw_todos, list) else []
+                )
+                plan_block = _render_plan_block(_board_todos)
+                messages = _apply_system_prefix(
+                    messages,
+                    task,
+                    extra_suffix=_extra_suffix,
+                    controls_suffix=_controls_suffix,
+                    plan_block=plan_block,
+                )
 
                 # ── 分级压缩：根据 token 使用量选择压缩策略（SaaS：策略可配）──
                 if mode_cfg.enable_compaction:
@@ -2265,7 +2431,7 @@ class AgentRuntime:
                         span_name="compaction",
                     )
                 await self._persist_dropped(overflow_dropped, task)
-                await self._persist_folds(overflow_folds, task)
+                await self._persist_folds(overflow_folds, task, model=model)
 
                 # C3：**本次调用**的用量（增量）走独立事件 —— 与 `done` 的**整轮累计**分开，
                 # 消费方按 `type` 取值即可，不必只能等终态。
@@ -2541,6 +2707,11 @@ class AgentRuntime:
                                     error="budget_exceeded:steps",
                                     trace_id=trace_id,
                                 )
+                                # 与轮首预算越界**同一收尾**：此前这里只 `return`，既不标终态、
+                                # 也不发 done —— `agent_runs` 行会永远停在 `running`，而
+                                # `ux_agent_runs_session_active` 让该会话再也提交不了新 run，
+                                # 前端则一直转圈。A4 的"正常完成必须写终态"在这里同样成立。
+                                await self._mark_run_status(task, "failed")
                                 return
 
                             # 副作用账本：记下这次动用了什么能力、能不能撤销
@@ -2706,6 +2877,51 @@ class AgentRuntime:
                         type="text",
                         content=reasoning_content,
                     )
+
+                # ── P1-2：清单未完成 ⇒ 不许静默收尾 ──
+                #
+                # 长任务最常见的"假完成"：模型写了一份 8 项清单，做完 2 项，然后
+                # 在一轮里不调任何工具、只说"好的，我已经完成了"就结束。此前这条
+                # 路径直接 `break`，用户看到一段像模像样的总结、看板上 6 项还是 `[ ]`。
+                #
+                # 这里在**收尾的唯一出口**上加一道闸：看板还有未完成项、且本轮什么
+                # 工具都没调 ⇒ 把"你还有 N 项没做"作为 user 消息推回去，让它继续。
+                # 次数封顶（`plan_reminder_budget`）—— 否则模型可以靠反复声称"做完了"
+                # 把回合数烧光，而真正的硬闸门（预算/轮数）反而永远不触发。
+                if plan_reminder_budget > 0 and self._awaiting_input is None:
+                    _unfinished = [
+                        t for t in _board_todos if t.get("status") != "completed"
+                    ]
+                    if _unfinished and len(_unfinished) < len(_board_todos):
+                        # 只在**部分完成**时提醒：整份都没动说明计划刚写下、还没开工，
+                        # 此时模型通常正要开始；而"做了大部分就收工"才是要拦的形态。
+                        plan_reminder_budget -= 1
+                        _answered = False
+                        _names = "；".join(
+                            f"{t.get('id', '')} {t.get('content', '')}".strip()
+                            for t in _unfinished[:8]
+                        )
+                        messages.append(
+                            _normalize_msg(
+                                role="user",
+                                content=(
+                                    "<plan-incomplete>\n"
+                                    f"你的任务清单还有 {len(_unfinished)} 项未完成：{_names}\n"
+                                    "本轮你没有调用任何工具就结束了。请继续推进：先做下一项，"
+                                    "做完立刻用 todo_write 把它标成 completed。"
+                                    "如果你判断这些项确实不必要，用 todo_write 删掉它们并说明理由。\n"
+                                    "</plan-incomplete>"
+                                ),
+                            )
+                        )
+                        yield AgentEvent(
+                            type="text",
+                            content=(
+                                f"（清单还有 {len(_unfinished)} 项未完成，继续推进）"
+                            ),
+                            trace_id=trace_id,
+                        )
+                        continue
                 break
 
             # ── S6b：可选的 rubric 自查回合（默认关）──
@@ -2750,19 +2966,37 @@ class AgentRuntime:
                     ),
                 )
 
-            # ── 兜底：循环用尽但未产生回答时，输出最后的思考内容 ──
-            if not _answered and _last_reasoning:
+            # ── 轮尽未完成：报预算越界，而不是把思考当答案 ──
+            #
+            # 此前这里把 `_last_reasoning` 当最终回答发出。长任务的真实表现因此是
+            # "答了一段像模像样的话就停了"：用户**不知道它没做完**，而 checkpoint 续跑
+            # 又被 `start_turn` 夹到 `max_turns-1` 拿不到剩余轮次 —— 整套续跑基建等于作废。
+            #
+            # 现在与轮首预算越界同一语义：`budget_exceeded:turns` 是**失败**，不是答案。
+            # 单独发一条 text 让用户看懂"为什么停了、怎么接着来"（error 事件的文本前端
+            # 不一定展示），并标 failed 让 run 退出活跃集合。
+            if not _answered and self._awaiting_input is None:
                 logger.warning(
-                    "Agent loop exhausted without final answer, using reasoning as fallback"
+                    "Agent loop exhausted without final answer (task=%s, turns=%d, max_turns=%s)",
+                    task.id,
+                    turn + 1,
+                    task.max_turns,
+                )
+                yield AgentEvent(
+                    type="error",
+                    error="budget_exceeded:turns",
+                    trace_id=trace_id,
                 )
                 yield AgentEvent(
                     type="text",
-                    content=_last_reasoning,
+                    content=(
+                        f"已达轮次上限（{task.max_turns} 轮），任务尚未完成。"
+                        "已完成的进度已写入检查点；继续对话可从断点接着做。"
+                    ),
+                    trace_id=trace_id,
                 )
-                # 仅当 reasoning 尚未作为消息保存时才追加
-                if not messages or messages[-1].get("role") != "assistant":
-                    msg_kwargs = {"role": "assistant", "content": _last_reasoning}
-                    messages.append(_normalize_msg(**msg_kwargs))
+                await self._mark_run_status(task, "failed")
+                return
 
             # ── 追加本轮增量到 Durable 层（PG messages）──
             #

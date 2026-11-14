@@ -223,10 +223,16 @@ async def load() -> dict[str, Any]:
     return {"todos": [], "revision": 0}
 
 
-async def write(todos: list[dict[str, Any]]) -> dict[str, Any]:
+async def write(
+    todos: list[dict[str, Any]], *, merge: bool = False
+) -> dict[str, Any]:
     """写入板子，返回落库后的完整状态（含 revision）。
 
-    主/子 agent 的语义差异见模块文档：主 agent 整份替换，子 agent 按 id 合并。
+    主/子 agent 的语义差异见模块文档：子 agent 一律按 id 合并。
+    ``merge=True`` 让**主 agent** 也走合并路径（增量更新：只动本次提到的条目，
+    未提及的保留在板上）—— 这是"做完一项就标一项"能生效的前提。缺省仍是整份替换，
+    保持旧契约（前端与既有测试按"列表被替换"渲染）。
+
     revision 每次写入 +1 —— 前端据此判断"这是不是比我手上更新的那份"，
     避免乱序到达的 SSE 事件让面板倒退。
     """
@@ -240,7 +246,7 @@ async def write(todos: list[dict[str, Any]]) -> dict[str, Any]:
     )
     revision = int(current.get("revision") or 0) + 1
 
-    if depth > 0:
+    if depth > 0 or merge:
         merged = _merge([dict(i) for i in existing], todos)
     else:
         merged = _renumber(todos)

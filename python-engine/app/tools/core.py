@@ -31,6 +31,13 @@ def _safe_path(path: str, root: str) -> Path:
 #: 分页的意义是"给一个能继续的窗口"，不是"一次读完"。
 READ_FILE_DEFAULT_LIMIT = 2000
 
+#: `grep_files` 的**单文件**命中上限。没有它时，一个高频词（如 `user`）会把
+#: 单文件的几百条命中全部倒进上下文 —— 总条数上限 200 拦不住这种"一个文件吃满额度"。
+GREP_MAX_PER_FILE = 20
+#: `grep_files` 单行文本的最大字符数。压缩过的产物、生成代码常有几万字符的单行，
+#: 原样回灌等于把整个文件塞进上下文。截断后仍保留可定位的前缀。
+GREP_LINE_MAX_CHARS = 240
+
 
 async def read_file(path: str, offset: int = 0, limit: int = READ_FILE_DEFAULT_LIMIT) -> dict[str, Any]:
     """读文件（分页）。
@@ -123,7 +130,7 @@ async def write_file(path: str, content: str) -> dict[str, Any]:
     from app.agent import undo_stack
     from app.backends.context import get_backend
     from app.tools.context import get_session_id
-    from app.tools.fs_guard import check_before_write
+    from app.tools.fs_guard import check_before_write, observe
     from app.tools.sandbox import safe_join
 
     target = safe_join(path)  # 沙箱隔离
@@ -138,6 +145,12 @@ async def write_file(path: str, content: str) -> dict[str, Any]:
     written = await get_backend().write(path, content)
     if written.error:
         return {"error": written.error}
+    # 写成功后**刷新读取签名**：否则同一会话里"写一个文件 → 再写/再编辑它"必然撞上
+    # `file changed since it was last read` —— 因为签名记录的是写入**前**的版本，
+    # 而写入本身改了 mtime/size。模型看到的表现为"我刚写完就不让我改了"，
+    # 于是退回整篇 write_file 重试（又撞 max_tokens 截断）。这是长任务里
+    # 最伤连续性的一个坑：每写一次就锁死该文件。
+    observe(target)
     result: dict[str, Any] = {"path": written.path, "bytes": written.bytes_written}
     if undo_note:
         result["undo_warning"] = undo_note
@@ -156,13 +169,20 @@ async def execute_command(command: str, timeout: int = 30) -> dict[str, Any]:
 
 
 async def grep_files(
-    query: str, root: str = ".", glob: str = "", max_results: int = 200
+    query: str,
+    root: str = ".",
+    glob: str = "",
+    max_results: int = 200,
+    max_per_file: int = GREP_MAX_PER_FILE,
 ) -> dict[str, Any]:
     """按正则搜索文件内容（批 B：匹配与读取都经后端）。
 
     行为与迁移前一致：候选文件由 `**/{glob}` 限定 → 逐个读全文 → 逐行匹配 → 命中达上限即返回。
     因此保留"先拿文件列表、再逐文件读"的两步形态（而不是一次目录级 grep），
     这样 `max_results` 的截断点与扫描顺序都不变。
+
+    **两道上限**（此前只有 `max_results`）：`max_per_file` 防"单个高频文件吃满额度"，
+    `GREP_LINE_MAX_CHARS` 防"一行几万字符"（压缩产物、生成代码）原样进上下文。
     """
     from app.backends.context import get_backend
 
@@ -185,11 +205,21 @@ async def grep_files(
         if read.error:
             logger.debug("Cannot read file %s, skipping", candidate)
             continue
+        # 本文件的命中计数：达到 `max_per_file` 就整份文件收手，避免单个高频文件
+        # 把总额度吃满（总上限 `max_results` 只能保证"总量"，管不住"分布"）。
+        file_hits = 0
         for idx, line in enumerate(read.content.splitlines(), start=1):
-            if pattern.search(line):
-                matches.append({"path": candidate, "line": idx, "text": line})
-                if len(matches) >= max_results:
-                    return {"count": len(matches), "matches": matches}
+            if not pattern.search(line):
+                continue
+            # 单行截断：压缩产物/生成代码常有几万字符的单行，原样回灌等于塞进整个文件。
+            if len(line) > GREP_LINE_MAX_CHARS:
+                line = f"{line[:GREP_LINE_MAX_CHARS]}…[+{len(line) - GREP_LINE_MAX_CHARS} chars]"
+            matches.append({"path": candidate, "line": idx, "text": line})
+            file_hits += 1
+            if len(matches) >= max_results:
+                return {"count": len(matches), "matches": matches}
+            if file_hits >= max_per_file:
+                break
     return {"count": len(matches), "matches": matches}
 
 

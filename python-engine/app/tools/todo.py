@@ -121,7 +121,12 @@ async def todo_write(todos: list[dict[str, Any]]) -> dict[str, Any]:
 
     from app.agent.plan import normalize, render, to_todos
 
-    plan, errors = normalize(normalized_input)
+    # 增量更新：条目自带 host id（`t1`…）时**沿用**它。
+    #
+    # 旧版每次都把 id 重排成 `t1…tn`，于是"更新第 3 项"必然退化成"重写整份清单" ——
+    # 而整份重写有两个副作用：模型倾向于每条都重打一遍（token 成本），以及在重打时
+    # 顺手把已完成项改回 pending（状态倒退，面板来回跳）。
+    plan, errors = normalize(normalized_input, keep_ids=True)
     if errors:
         return {"error": "invalid todos: " + "; ".join(errors)}
 
@@ -147,7 +152,13 @@ async def todo_write(todos: list[dict[str, Any]]) -> dict[str, Any]:
             object.__setattr__(step, "owner", step_owner)
 
     projection = to_todos(plan)
-    payload = await taskboard.write(projection)
+    # 条目**全部**带 id ⇒ 视为增量更新（只动提到的项，未提及的保留在板上）。
+    # 有任何一条缺 id ⇒ 视为整份重写（旧契约，前端按"列表被替换"渲染）。
+    # 这个判据是纯形状判断，不看模型声明，所以模型不会"自称增量"就把板子搞乱。
+    incremental = all(
+        str(item.get("id", "") or "").strip() for item in normalized_input
+    )
+    payload = await taskboard.write(projection, merge=incremental)
     payload_todos = payload.get("todos")
     stored: list[dict[str, Any]] = payload_todos if isinstance(payload_todos, list) else projection
 

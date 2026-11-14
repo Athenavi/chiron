@@ -127,7 +127,11 @@ class Settings(BaseSettings):
     llm_model: str = "deepseek-v4-flash"
 
     # ── Agent 配置 ──
-    max_turns: int = 10
+    # 主 Agent 单次 run 的回合上限。**这是兜底，不是主闸门**：真正决定长任务能否
+    # 跑完的是 `TaskBudget` 的 steps/tokens/wall 三轴（见 `app/agent/task_budget.py`）。
+    # 旧值 10 与网关 `AGENT_DEFAULT_MAX_TURNS=5` 叠加后，长任务在第 5 轮就被静默截断，
+    # 而 checkpoint 续跑又被夹到 `max_turns-1`，等于整套续跑基建失效。
+    max_turns: int = 50
     #: M23：一次 LLM 请求内**最多换几把 key** 再试一次（0 = 关掉整个机制，默认 1）。
     #: 只覆盖"还没向调用方产出任何东西"的那一次调用（见 `app/gateway/key_retry.py` 的
     #: "提交点"）—— 流式响应一旦开始吐 chunk 就绝不重试，否则重复输出 + 重复计费。
@@ -152,6 +156,15 @@ class Settings(BaseSettings):
     default_model: str = "claude-sonnet-4-20250514"
     default_max_tokens: int = 4096
     default_temperature: float = 0.1
+
+    #: 折叠摘要是否用**模型**生成（P2-1）。
+    #:
+    #: **默认关**。摘要是"上下文被裁掉之后的补偿"，而本地提取式（每条消息首行）
+    #: 已经能满足"事后看得出这段在谈什么"这个用途；模型摘要每次压缩都要多打一轮
+    #: 云端请求，而长任务里压缩会**反复**发生 —— 这笔开销与"能本地解决就别上云"
+    #: 直接冲突。开启后 `_upgrade_fold_digests` 才按 id 取回原文并调模型，
+    #: 失败一律回落提取式。
+    fold_digest_llm: bool = False
 
     # ── 生命周期 hooks（批 G）──
     #: 机制总开关。**默认关** —— 开启前零行为变化（方案 03 §3.2）。

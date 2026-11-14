@@ -90,6 +90,9 @@ def _read_window(target: Path, offset: int, limit: int) -> tuple[list[str], int]
 
     数完 `total_lines` 是为了它对前端的既有承诺（`ToolResultBlock.vue` 显示「N 行」）；
     代价是仍要扫一遍文件，换来的收益是内存从 O(文件大小) 降到 O(窗口)。
+
+    **超大文件不走这里**（见 `_read_window_uncounted`）：数行必须扫完全文，而 100MB
+    日志每次翻页都扫 100MB 是纯浪费 —— 翻 10 页就是 1GB 的读放大。
     """
     page: list[str] = []
     total = 0
@@ -101,6 +104,38 @@ def _read_window(target: Path, offset: int, limit: int) -> tuple[list[str], int]
             if len(page) < limit:
                 page.append(raw.rstrip("\n").rstrip("\r"))
     return page, total
+
+
+#: 超过这个字节数的文件**不再统计总行数**。
+#:
+#: 分页读的本意是"文件不进内存、只驻留一个窗口"；而数总行必须扫完全文。对大文件，
+#: 每翻一页就付一次全文扫描的代价（读放大 = 页数 × 文件大小），而 `total_lines`
+#: 只用于前端显示与调用方猜"还有没有下文"——后者已由 `truncated` 精确给出。
+#: 8MB 是分界：再往上，一次全文扫描的延迟已经超过翻页本身的收益。
+_LINE_COUNT_MAX_BYTES = 8 * 1024 * 1024
+
+
+def _read_window_uncounted(target: Path, offset: int, limit: int) -> tuple[list[str], bool]:
+    """只取窗口、不数总行，用"窗口之后还有没有内容"判断截断。
+
+    返回 ``(page, more)``，`more=True` 表示文件在窗口之后还有行 —— 它与
+    `_read_window` 的 `truncated = offset + len(page) < total_lines` 同义，
+    但只读到窗口末尾就停，不扫余下部分。
+    """
+    page: list[str] = []
+    more = False
+    with open(target, encoding="utf-8", errors="replace") as handle:
+        skipped = 0
+        for raw in handle:
+            if skipped < offset:
+                skipped += 1
+                continue
+            if len(page) < limit:
+                page.append(raw.rstrip("\n").rstrip("\r"))
+                continue
+            more = True
+            break
+    return page, more
 
 
 class LocalWorkspaceBackend:
@@ -126,8 +161,7 @@ class LocalWorkspaceBackend:
             )
 
         # 分页路径：先探头部判二进制，再**流式**取窗口 —— 文件不进内存，大文件才读得动。
-        # `total_lines` 仍然数完整文件（前端 `ToolResultBlock.vue` 要显示「N 行」），
-        # 但内容只驻留窗口。
+        # 超大文件不再统计总行（见 `_read_page` 与 `_LINE_COUNT_MAX_BYTES`）。
         if await asyncio.to_thread(_looks_binary, target):
             return ReadResult(
                 path=str(target),
@@ -136,16 +170,39 @@ class LocalWorkspaceBackend:
                     f"{_BINARY_PEEK} bytes); read_file reads text"
                 ),
             )
+        return await self._read_page(target, offset, limit)
+
+    async def _read_page(self, target: Path, offset: int, limit: int) -> ReadResult:
+        """分页读的**实现体**：大文件走不数总行的快路径。
+
+        阈值判断放在这里而不是 `read`：`read` 还要处理二进制探测与错误包装，
+        而"数不数总行"只跟文件大小有关，单独一层更容易读。
+
+        `total_lines` 对大文件返回 `-1`（未知）：调用方（`read_file`）据此把
+        提示写成"文件很大，未统计行数"，而不是给出一个**错误的具体数字**。
+        """
+        try:
+            size = await asyncio.to_thread(lambda: target.stat().st_size)
+        except OSError:
+            size = 0
+        if size > _LINE_COUNT_MAX_BYTES:
+            page, more = await asyncio.to_thread(_read_window_uncounted, target, offset, limit)
+            return ReadResult(
+                path=str(target),
+                content="\n".join(page),
+                total_lines=-1,
+                offset=offset,
+                limit=limit,
+                truncated=more,
+            )
         page, total_lines = await asyncio.to_thread(_read_window, target, offset, limit)
-        # 截断由**产生截断的这一层**给出，不由调用方扫文本猜测（协议约束 2）
-        truncated = (offset + len(page)) < total_lines
         return ReadResult(
             path=str(target),
             content="\n".join(page),
             total_lines=total_lines,
             offset=offset,
             limit=limit,
-            truncated=truncated,
+            truncated=(offset + len(page)) < total_lines,
         )
 
     async def read_bytes(self, path: str) -> ReadBytesResult:

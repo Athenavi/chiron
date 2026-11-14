@@ -18,6 +18,7 @@ host 不校验、不赋予 id、更不区分"我猜会改的文件"与"我真的
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -25,6 +26,8 @@ from typing import Any
 MAX_STEPS = 50
 #: 允许的状态（与 deepagents / todo.py 一致）。
 VALID_STATUSES: frozenset[str] = frozenset({"pending", "in_progress", "completed"})
+#: host id 的合法形态（`t1`…）。增量更新只认这个形态，其余一律重新分配。
+_ID_RE = re.compile(r"t[1-9]\d*")
 
 
 @dataclass(frozen=True)
@@ -77,11 +80,17 @@ def _as_str_tuple(value: Any) -> tuple[str, ...]:
     return tuple(out)
 
 
-def normalize(raw: Any, *, revision: int = 0) -> tuple[Plan, list[str]]:
+def normalize(
+    raw: Any, *, revision: int = 0, keep_ids: bool = False
+) -> tuple[Plan, list[str]]:
     """把模型给的原始 todos 归一化为 ``Plan``，并返回人类可读的校验错误列表。
 
     宽进严出：结构不对时**不抛异常**（模型可能写歪），而是收集错误、返回能解析的部分，
     由调用方决定是拒绝整份计划还是回灌错误。``errors`` 非空即表示这份计划**不可接受**。
+
+    ``keep_ids=True``（增量更新路径）：条目自带合法 id 且不与前文冲突时**沿用**它。
+    否则每次归一化都会把 id 重排成 ``t1…tn``，增量更新就永远匹配不到板上的旧条目 ——
+    "按编号更新一项"会退化成"整份重写"。默认 ``False`` 保持旧行为（host 全权赋 id）。
     """
     errors: list[str] = []
     if raw is None:
@@ -92,6 +101,15 @@ def normalize(raw: Any, *, revision: int = 0) -> tuple[Plan, list[str]]:
         errors.append(f"too many steps ({len(raw)} > {MAX_STEPS})")
 
     steps: list[PlanStep] = []
+    used_ids: set[str] = set()
+
+    def _next_free_id() -> str:
+        """分配一个**当前未被占用**的 host id（沿用旧 id 后不能撞车）。"""
+        n = len(used_ids) + 1
+        while f"t{n}" in used_ids:
+            n += 1
+        return f"t{n}"
+
     #: 先收下原始的依赖声明，等**全部** step 都有了 host id 再统一解析 ——
     #: 依赖是"指向别的 step"的关系，处理它必须先有全集。
     raw_depends: list[tuple[str, ...]] = []
@@ -122,9 +140,22 @@ def normalize(raw: Any, *, revision: int = 0) -> tuple[Plan, list[str]]:
         # host 赋 id（不变量 1）：模型给的不被采信为身份，仅作为可读后缀。
         # 用 `t` 前缀（`t1`/`t2`…）与既有 `write_todos` 的 id 形态保持一致，前端与测试
         # 都按它渲染，改前缀只会制造一次无谓的兼容性变更。
+        #
+        # `keep_ids`：增量更新时沿用板上已有的 id。**只认 `t<数字>` 形态**且不重复的，
+        # 其余一律重新分配 —— 模型的笔误（`t99`、`step-a`）不能凭空插进一个身份。
+        wanted = str(item.get("id", "") or "").strip()
+        if (
+            keep_ids
+            and _ID_RE.fullmatch(wanted)
+            and wanted not in used_ids
+        ):
+            step_id = wanted
+        else:
+            step_id = _next_free_id()
+        used_ids.add(step_id)
         steps.append(
             PlanStep(
-                id=f"t{index + 1}",
+                id=step_id,
                 content=content,
                 status=status,
                 candidate_files=candidates,

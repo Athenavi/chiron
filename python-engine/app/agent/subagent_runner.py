@@ -742,7 +742,7 @@ class SubAgentRunner:
             content=task,
             system_prompt=system_prompt,
             llm_config=(spec.llm_config() if spec else {}) | ({"mode": mode} if mode else {}),
-            max_turns=max(1, min(max_turns or (spec.max_turns if spec else 5), 10)),
+            max_turns=max(1, min(max_turns or (spec.max_turns if spec else 30), 30)),
             subagent_depth=child_depth,
         )
         tools = self._resolve_tools(spec, mode, child_depth, max_depth)

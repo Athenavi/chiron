@@ -104,6 +104,11 @@ async def edit_file(
     written = await backend.write(path, modified)
     if written.error:
         return {"error": written.error}
+    # 与 `write_file` 同一理由：写成功后刷新读取签名。连续编辑同一文件（改一处 → 再改一处）
+    # 是长任务的常态，若不刷新，第二次编辑会被 read-before-write 判成"文件已变"而拒绝。
+    from app.tools.fs_guard import observe as _observe
+
+    _observe(target)
 
     diff_lines = difflib.unified_diff(
         original.splitlines(keepends=True),

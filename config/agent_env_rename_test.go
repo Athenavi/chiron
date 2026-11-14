@@ -96,7 +96,7 @@ func TestAgentEnvDefaultsUseTheNewNamesOnly(t *testing.T) {
 	if cfg.AgentMaxOutputTokens != 8192 {
 		t.Fatalf("AGENT_MAX_OUTPUT_TOKENS 默认应为 8192, got %d", cfg.AgentMaxOutputTokens)
 	}
-	if cfg.AgentDefaultMaxTurns != 5 {
-		t.Fatalf("AGENT_DEFAULT_MAX_TURNS 默认应为 5, got %d", cfg.AgentDefaultMaxTurns)
+	if cfg.AgentDefaultMaxTurns != 50 {
+		t.Fatalf("AGENT_DEFAULT_MAX_TURNS 默认应为 50, got %d", cfg.AgentDefaultMaxTurns)
 	}
 }
