@@ -9,8 +9,8 @@ import {
   ThunderboltOutlined, DownloadOutlined, DeleteOutlined, PlayCircleOutlined,
   SearchOutlined, CodeOutlined, MessageOutlined, ShopOutlined, RobotOutlined,
 } from '@ant-design/icons-vue'
-import { api, listAgents, listMarket, installMarket } from '../api'
-import type { MarketItem } from '../api'
+import { api, listAgents, listMarket, installMarket, discoverSkills } from '../api'
+import type { DiscoveredSkill, DiscoverResult, MarketItem } from '../api'
 import PageSkeleton from '../components/common/PageSkeleton.vue'
 import EmptyState from '../components/common/EmptyState.vue'
 import SkillMarketCard from '../components/SkillMarketCard.vue'
@@ -282,6 +282,51 @@ async function handleInstall() {
     message.error(tr('errors.install_failed_error', { error: serverErrorDetail(e, '') }))
   } finally {
     installLoading.value = false
+  }
+}
+
+// ── 发现（远端索引：浏览 + 一键安装）──
+// 与「安装」tab 的分工：那边是手填 URL / 内联 JSON，这边是从索引挑。
+// `install_url` 为空表示该条目没给可安装地址（索引常只给 name+description），
+// 此时按钮置灰而不是拿 `source` 去装 —— 那会装出一个把整个索引当技能包的东西。
+const discoverURL = ref('')
+const discoverLoading = ref(false)
+const discoverWarnings = ref<string[]>([])
+const discoverRemote = ref<DiscoveredSkill[]>([])
+const discoverInstalling = ref<string | null>(null)
+
+async function loadDiscover() {
+  discoverLoading.value = true
+  discoverWarnings.value = []
+  try {
+    const res: DiscoverResult = await discoverSkills(discoverURL.value.trim())
+    discoverRemote.value = res.remote
+    discoverWarnings.value = res.warnings
+  } catch (e) {
+    // 显式传 URL 时的失败（含 SSRF 拦截）会抛到这里 —— 必须让用户看见，
+    // 不能静默当成"没有远端技能"。
+    discoverRemote.value = []
+    message.error(serverErrorDetail(e, '') || errorMessageText(e, ''))
+  } finally {
+    discoverLoading.value = false
+  }
+}
+
+async function handleDiscoverInstall(item: DiscoveredSkill) {
+  if (!item.install_url) {
+    message.error(tr('agent.discover_missing_url'))
+    return
+  }
+  discoverInstalling.value = item.name
+  try {
+    await api.post('/v1/skills/install', { url: item.install_url })
+    message.success(tr('agent.skill_installed'))
+    // 装完两边都要刷新：列表要出现新技能，远端列表要把该条标成已安装。
+    await Promise.all([loadSkills(), loadDiscover()])
+  } catch (e) {
+    message.error(tr('errors.install_failed_error', { error: serverErrorDetail(e, '') }))
+  } finally {
+    discoverInstalling.value = null
   }
 }
 
@@ -579,6 +624,109 @@ async function handleGenerate() {
         />
       </TabPane>
 
+      <!-- ── 发现技能（远端索引）── -->
+      <TabPane
+        key="discover"
+        :tab="$t('agent.discover_skills')"
+      >
+        <div class="panel-card">
+          <h3 class="panel-title">
+            <SearchOutlined /> {{ $t('agent.discover_skills') }}
+          </h3>
+          <p class="discover-hint">
+            {{ $t('agent.discover_hint') }}
+          </p>
+          <Input
+            v-model:value="discoverURL"
+            :placeholder="$t('agent.discover_url_placeholder')"
+            allow-clear
+            @press-enter="loadDiscover"
+          >
+            <template #prefix>
+              <SearchOutlined />
+            </template>
+          </Input>
+          <Button
+            type="primary"
+            :loading="discoverLoading"
+            class="install-btn"
+            @click="loadDiscover"
+          >
+            {{ $t('common.search') }}
+          </Button>
+        </div>
+
+        <!-- 默认源不可用属降级，不影响本地清单；必须在界面上留痕 -->
+        <Alert
+          v-for="(w, i) in discoverWarnings"
+          :key="i"
+          type="warning"
+          show-icon
+          :message="w"
+          class="discover-warning"
+        />
+
+        <PageSkeleton
+          v-if="discoverLoading"
+          variant="cards"
+          :columns="3"
+          :rows="3"
+          :header="false"
+        />
+        <EmptyState
+          v-else-if="discoverRemote.length === 0"
+          size="page"
+          :icon="markRaw(SearchOutlined)"
+          :description="$t('agent.discover_no_remote')"
+        />
+        <div
+          v-else
+          class="skill-grid stagger-in"
+        >
+          <div
+            v-for="item in discoverRemote"
+            :key="item.name"
+            class="skill-card"
+          >
+            <div class="card-top">
+              <span class="card-icon-tile"><CodeOutlined /></span>
+              <div class="card-titles">
+                <div class="card-name-line">
+                  <span class="card-name">{{ item.name }}</span>
+                  <Tag
+                    v-if="item.version"
+                    class="exec-tag"
+                  >
+                    v{{ item.version }}
+                  </Tag>
+                </div>
+                <span class="card-desc">{{ item.description || $t('common.no_description') }}</span>
+                <span
+                  v-if="item.author"
+                  class="card-author"
+                >{{ item.author }}</span>
+              </div>
+            </div>
+            <div class="card-actions">
+              <!-- 没给可安装地址就置灰：拿 source 去装会装出坏技能 -->
+              <Button
+                type="primary"
+                size="small"
+                :disabled="!item.install_url"
+                :loading="discoverInstalling === item.name"
+                :title="item.install_url ? item.install_url : $t('agent.discover_missing_url')"
+                @click="handleDiscoverInstall(item)"
+              >
+                <template #icon>
+                  <DownloadOutlined />
+                </template>
+                {{ $t('common.install') }}
+              </Button>
+            </div>
+          </div>
+        </div>
+      </TabPane>
+
       <!-- ── 安装技能 ── -->
       <TabPane
         key="install"
@@ -806,6 +954,10 @@ async function handleGenerate() {
 .or-divider { text-align: center; color: var(--text-tertiary); margin: 14px 0; }
 .mono-input :deep(textarea) { font-family: var(--font-mono); font-size: 12px; }
 .install-btn { margin-top: 14px; }
+/* 发现面板：提示文案与降级告警（默认源不可用属降级，不影响本地清单） */
+.discover-hint { font-size: 12px; color: var(--text-tertiary); line-height: 1.6; margin: 0 0 10px; }
+.discover-warning { margin-top: 14px; }
+.card-author { display: block; margin-top: 2px; font-size: var(--fs-xs); color: var(--text-tertiary); }
 .gen-alert { margin-top: 14px; }
 .gen-pre { margin: 12px 0 0; padding: 10px; background: var(--bg-secondary); border-radius: var(--radius-lg); font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-secondary); white-space: pre-wrap; max-height: 260px; overflow-y: auto; }
 

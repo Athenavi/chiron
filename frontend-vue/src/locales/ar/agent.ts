@@ -246,4 +246,10 @@ export default {
   superagent_overlay_input_locked: "الإدخال معطّل أثناء التولّي حتى لا تتنافس الجولات اليدوية مع الآلية",
   superagent_overlay_unlimited: "بلا حدّ",
   superagent_budget_exhausted_notice: "توقّف التولّي تلقائيًا: استُهلك حدّ الرموز المخصّص",
+  discover_skills: "اكتشاف المهارات",
+  discover_hint: "ابحث عن مهارات قابلة للتثبيت من فهرس بعيد؛ اتركه فارغًا لاستخدام المصدر الافتراضي",
+  discover_url_placeholder: "https://example.com/skills.json (فارغ = المصدر الافتراضي)",
+  discover_no_remote: "لا توجد مهارات بعيدة متاحة",
+  discover_already_installed: "مثبّتة",
+  discover_missing_url: "هذا العنصر لا يوفّر رابط تثبيت",
 }

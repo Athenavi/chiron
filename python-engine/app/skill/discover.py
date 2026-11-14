@@ -40,6 +40,9 @@ def local_rows(store: SkillStore) -> dict[str, dict[str, Any]]:
             # 与 `source` 不是一回事：source 来自技能定义本身（exec 配置）。
             "scope": s.scope,
             "installed": True,
+            # 已装的技能不需要"从哪装"，留空保持与远端行同构，
+            # 前端可以只写一套渲染分支。
+            "install_url": "",
         }
     return rows
 
@@ -63,6 +66,12 @@ def row_from_registry(
         "author": str(item.get("author") or ""),
         # 条目自带 source 优先；没有则回落到索引地址，便于前端回溯来源。
         "source": str(item.get("source") or origin),
+        # `install_url` 与 `source` 不是一回事，刻意不互相推断：
+        #   source     =「这条从哪来」，用于展示，可以是索引地址本身；
+        #   install_url =「能交给 skill_install 的地址」，必须指向技能包。
+        # 索引条目常常只给 name+description、没有可装地址，此时留空 ——
+        # 若拿 source（=索引地址）去装，会装出一个把整个索引当成技能包的怪东西。
+        "install_url": str(item.get("install_url") or item.get("url") or ""),
         "scope": "",
         "installed": name in installed,
     }

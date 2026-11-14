@@ -246,4 +246,10 @@ export default {
   superagent_overlay_input_locked: "Input is disabled during takeover so manual turns cannot race the automated ones",
   superagent_overlay_unlimited: "Unlimited",
   superagent_budget_exhausted_notice: "Takeover stopped automatically: the token budget was used up",
+  discover_skills: "Discover skills",
+  discover_hint: "Find installable skills from a remote index; leave the URL empty to use the server default",
+  discover_url_placeholder: "https://example.com/skills.json (empty = server default)",
+  discover_no_remote: "No remote skills available",
+  discover_already_installed: "Installed",
+  discover_missing_url: "This entry provides no install URL",
 }

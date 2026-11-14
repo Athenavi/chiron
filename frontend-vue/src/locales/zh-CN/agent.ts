@@ -246,4 +246,10 @@ export default {
   superagent_overlay_input_locked: "接管期间无法手动输入，避免与自动回合争抢同一会话",
   superagent_overlay_unlimited: "不限",
   superagent_budget_exhausted_notice: "接管已按预算上限自动停止（token_cap 已用尽）",
+  discover_skills: "发现技能",
+  discover_hint: "从远端索引发现可安装的技能；留空则使用服务端配置的默认源",
+  discover_url_placeholder: "https://example.com/skills.json（留空用默认源）",
+  discover_no_remote: "远端索引暂无可用技能",
+  discover_already_installed: "已安装",
+  discover_missing_url: "该条目未提供可安装地址",
 }

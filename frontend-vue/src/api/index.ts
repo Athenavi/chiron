@@ -771,6 +771,70 @@ export async function listSkillResources(): Promise<WorkbenchResource[]> {
   return toWorkbenchResources(resp.data?.data?.skills)
 }
 
+/** 远端技能索引的一条（`GET /v1/skills/discover` 的 `local[]` / `remote[]` 元素） */
+export interface DiscoveredSkill {
+  name: string
+  description: string
+  version: string
+  author: string
+  /** 这条从哪来，用于展示；可能只是索引地址本身，**不能**拿它去安装 */
+  source: string
+  /** user / tenant / shared / builtin；远端条目为空 */
+  scope: string
+  /** 是否已装 —— 前端据此刻画「安装」与「已安装」两种按钮态 */
+  installed: boolean
+  /** 能交给 `POST /v1/skills/install` 的地址；空表示该条没给可安装地址 */
+  install_url: string
+}
+
+export interface DiscoverResult {
+  local: DiscoveredSkill[]
+  remote: DiscoveredSkill[]
+  warnings: string[]
+}
+
+/** 服务端已按统一口径校验/去重/截断，这里只做宽松读取，脏数据逐条丢弃。 */
+function toDiscoveredSkills(raw: unknown): DiscoveredSkill[] {
+  if (!Array.isArray(raw)) return []
+  const out: DiscoveredSkill[] = []
+  for (const item of raw) {
+    const r = item as Record<string, unknown> | null
+    const name = typeof r?.name === 'string' ? r.name : ''
+    if (!name) continue
+    out.push({
+      name,
+      description: typeof r?.description === 'string' ? r.description : '',
+      version: typeof r?.version === 'string' ? r.version : '',
+      author: typeof r?.author === 'string' ? r.author : '',
+      source: typeof r?.source === 'string' ? r.source : '',
+      scope: typeof r?.scope === 'string' ? r.scope : '',
+      installed: r?.installed === true,
+      install_url: typeof r?.install_url === 'string' ? r.install_url : '',
+    })
+  }
+  return out
+}
+
+/**
+ * 发现技能：本地已装 + 远端索引。
+ *
+ * `url` 留空走服务端配置的默认索引；服务端两者都空则只返回本地（不出网）。
+ * 显式传 `url` 且取回失败会抛出（SSRF 拦截必须可见）；默认源失败则降级为
+ * `warnings` 并返回本地清单，所以调用方拿到 `warnings` 不等于请求失败。
+ */
+export async function discoverSkills(url = ''): Promise<DiscoverResult> {
+  const resp = await api.get('/v1/skills/discover', {
+    params: url ? { url } : undefined,
+  })
+  // 兼容 OK() 包装与裸形态（与 listMarket 同一类坑）
+  const d = resp.data?.data ?? resp.data
+  return {
+    local: toDiscoveredSkills(d?.local),
+    remote: toDiscoveredSkills(d?.remote),
+    warnings: Array.isArray(d?.warnings) ? (d.warnings as string[]) : [],
+  }
+}
+
 /**
  * 插件（= MCP server）列表。用于"把插件带进对话"：选中后本次对话只放它提供的
  * 工具（见 python-engine/app/agent/runtime.py 的插件筛选）。
