@@ -69,6 +69,7 @@ export default {
     result_load_full: "Load full output ({size} original)",
     result_loaded_all: "Full output loaded",
     result_load_failed: "Load failed — retry",
+    result_more_chars: "Load more ({n} chars left)",
     n_items: "{n} items",
     resend_in_n_s: "Resend in {n}s",
     year_month_day_hh_mm: "{year}-{month}-{day} {hh}:{mm}",

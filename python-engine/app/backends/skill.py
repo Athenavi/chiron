@@ -188,6 +188,10 @@ class SkillBackend:
     async def write(self, path: str, content: str) -> WriteResult:
         return WriteResult(path=path, error=_READ_ONLY)
 
+    async def append(self, path: str, content: str) -> WriteResult:
+        # 只读是硬约束：追加也是写入，同样拒绝（不能因为"只改末尾"就放宽）。
+        return WriteResult(path=path, error=_READ_ONLY)
+
     async def edit(self, path: str, old: str, new: str) -> EditResult:
         return EditResult(path=path, error=_READ_ONLY)
 

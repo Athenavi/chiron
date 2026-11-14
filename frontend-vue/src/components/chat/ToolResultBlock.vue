@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { CaretRightOutlined, ExclamationCircleOutlined } from '@ant-design/icons-vue'
 import type { ToolResultItem } from './chat-types'
 import { formatSize } from './chat-types'
@@ -126,8 +126,11 @@ const parsed = computed<ParsedResult>(() => {
   }
   // 纯文本里携带的 patch（例如 run_code 直接打印 diff）同样按 diff 渲染
   if (looksLikeDiff(c)) return { kind: 'diff', diff: parseUnifiedDiff(c), text: '' }
-  const text = c.length <= 6000 ? c : `${c.slice(0, 3000)}\n...(truncated ${c.length - 6000} chars)...\n${c.slice(-3000)}`
-  return { kind: 'text', text }
+  // **不在这里截断**：截断逻辑交给 `visibleText` 按页推进（见下方分页常量）。
+  // 原先这里是 `c.length <= 6000 ? c : 头 3000 + 尾 3000` —— 尾部的保留看似贴心，
+  // 实则让"加载更多"无从实现（中间那段已经被扔掉，补不回来），而且 6000 是个
+  // 与后端毫无关系的魔法数字。
+  return { kind: 'text', text: c }
 })
 
 // read 分型的行号行
@@ -207,6 +210,63 @@ const canLoadFull = computed(
 )
 
 const hasMoreFull = computed(() => canLoadFull.value && !reachedEnd.value)
+
+// ── 文本/JSON 结果的分页预览 ──
+//
+// 旧实现是 `c.length <= 6000 ? c : 头 3000 + 尾 3000`。两个问题：
+//   1. 中间那段被**直接丢弃**，"加载更多"无从实现 —— 补不回来；
+//   2. 6000 是个与后端任何阈值都无关的魔法数字。
+//
+// 现在改为**只截尾不丢中段**：先给 `TEXT_PREVIEW_CHARS` 字符，"加载更多"每次再放
+// 一页；滚动到接近底部时由 IntersectionObserver 自动续页，用户不必反复点按钮。
+//
+// 位置很关键：这一块必须排在 `displayContent` 之后。`watch([...textHasMore...])`
+// 在 setup 阶段就会求值一次，而 `textHasMore → parsed → displayContent`，
+// 排在前面会踩 TDZ（`Cannot access 'displayContent' before initialization`）。
+const TEXT_PREVIEW_CHARS = 4000
+const TEXT_PAGE_CHARS = 4000
+
+/** 当前已放出多少字符 */
+const textShown = ref(TEXT_PREVIEW_CHARS)
+
+/** 实际渲染的文本（`parsed.text` 的头部片段） */
+const visibleText = computed(() => {
+  const full = parsed.value.text
+  return full.length <= textShown.value ? full : full.slice(0, textShown.value)
+})
+const textRemaining = computed(() => Math.max(0, parsed.value.text.length - textShown.value))
+const textHasMore = computed(() => textRemaining.value > 0)
+
+function loadMoreText() {
+  if (!textHasMore.value) return
+  textShown.value = Math.min(parsed.value.text.length, textShown.value + TEXT_PAGE_CHARS)
+}
+
+// 内容换了（换了一条工具结果）就回到首页，否则新结果会继承上一条的展开量
+watch(() => props.item.content, () => { textShown.value = TEXT_PREVIEW_CHARS })
+
+/** 自动续页的哨兵：进入视口（含 200px 余量）即再放一页 */
+const textSentinel = ref<HTMLElement | null>(null)
+let textObserver: IntersectionObserver | null = null
+
+function setupTextObserver() {
+  textObserver?.disconnect()
+  textObserver = null
+  const el = textSentinel.value
+  // 没有更多可放、面板收起、或环境不支持观察器时都不必挂
+  if (!el || !textHasMore.value || !expanded.value) return
+  if (typeof IntersectionObserver === 'undefined') return
+  textObserver = new IntersectionObserver(
+    entries => { if (entries.some(e => e.isIntersecting)) loadMoreText() },
+    { rootMargin: '200px' },
+  )
+  textObserver.observe(el)
+}
+
+// 哨兵出现/消失、是否还有更多、面板展开状态三者任一变化都要重挂
+watch([textSentinel, textHasMore, expanded], () => { nextTick(setupTextObserver) })
+onMounted(() => { nextTick(setupTextObserver) })
+onUnmounted(() => { textObserver?.disconnect(); textObserver = null })
 
 /** 码点数：与服务端 `substring` 的口径一致（`string.length` 数的是 UTF-16 码元）。 */
 function codePointLength(s: string): number {
@@ -451,17 +511,38 @@ function todoStatusLabel(status?: string): string {
         <pre
           v-if="parsed.kind === 'json'"
           class="result-code"
-        >{{ parsed.text }}</pre>
+        >{{ visibleText }}</pre>
         <pre
           v-else-if="parsed.kind === 'text' && parsed.text.includes('\n')"
           class="result-code"
-        >{{ parsed.text }}</pre>
+        >{{ visibleText }}</pre>
         <div
           v-else
           class="result-text"
         >
-          {{ parsed.text }}
+          {{ visibleText }}
         </div>
+
+        <!-- 文本分页：先给一页，滚到底部自动续页（无感），也保留手动按钮 -->
+        <div
+          v-if="textHasMore"
+          class="result-load"
+        >
+          <button
+            class="result-more-btn"
+            type="button"
+            @click="loadMoreText"
+          >
+            {{ $t('common.result_more_chars', { n: textRemaining }) }}
+          </button>
+        </div>
+        <!-- 自动续页哨兵：进入视口即再放一页。放在滚动容器底部，用户不点按钮也能读完 -->
+        <div
+          v-if="textHasMore"
+          ref="textSentinel"
+          class="result-sentinel"
+          aria-hidden="true"
+        />
 
         <!-- 大 output 按需展开：列表接口只给预览，这里按 8KB 分段拉全文。
              不预取 —— 一页 50 条工具调用预取全文，等于把分页省下的带宽又花回去。 -->
@@ -521,6 +602,16 @@ function todoStatusLabel(status?: string): string {
 .result-load-btn:disabled { opacity: .6; cursor: default; }
 .result-load-done { font-size: var(--fs-xs); color: var(--text-tertiary); }
 .result-load-error { font-size: var(--fs-xs); color: var(--error); }
+/* 文本分页的「加载更多」与自动续页哨兵 */
+.result-more-btn {
+  padding: 3px 10px; border: var(--hairline-width) solid var(--border-card);
+  border-radius: var(--sig-radius-button); background: none;
+  color: var(--text-tertiary); font-size: var(--fs-xs); cursor: pointer;
+  transition: color var(--dur-fast) ease, border-color var(--dur-fast) ease;
+}
+.result-more-btn:hover { color: var(--primary); border-color: var(--primary); }
+/* 哨兵本身不可见，只用于触发 IntersectionObserver；高度非零才可能进入视口 */
+.result-sentinel { height: 1px; }
 .result-image { max-width: min(320px, 80vw); max-height: 240px; border-radius: var(--sig-radius-card); border: var(--hairline-width) solid var(--border-card); display: block; margin-top: 4px; }
 
 /* 失败结果：卡片 banner 统一转错误色，扫一眼就能定位是哪一步断了 */

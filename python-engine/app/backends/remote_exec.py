@@ -197,6 +197,9 @@ class RemoteExecBackend:
     async def write(self, path: str, content: str) -> WriteResult:
         return await self._inner.write(path, content)
 
+    async def append(self, path: str, content: str) -> WriteResult:
+        return await self._inner.append(path, content)
+
     async def edit(self, path: str, old: str, new: str) -> EditResult:
         return await self._inner.edit(path, old, new)
 

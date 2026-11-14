@@ -219,6 +219,18 @@ class FileStoreBackend:
             )
         return WriteResult(path=path, bytes_written=len(content.encode("utf-8")))
 
+    async def append(self, path: str, content: str) -> WriteResult:
+        """追加写：FileStore 没有原地追加接口，退化为"读全文 + 重写"。
+
+        这里**不假装支持**：读全文再拼的代价随文件增长而线性上升，对大文件正是我们想
+        避免的。但拒绝又会让分块写在 SaaS 部署下直接不可用，所以选择降级实现，并在
+        结果里如实说明代价，让调用方自己判断要不要改用一次性 `write_file`。
+        """
+        current = await self.read(path, limit=0)
+        # 文件不存在时从空开始 —— 追加的语义包含"创建"。
+        base = "" if current.error else current.content
+        return await self.write(path, base + content)
+
     async def edit(self, path: str, old: str, new: str) -> EditResult:
         """读全文 → 替换 → 写回（FileStore 没有原地编辑能力，这样也便于审计）。"""
         current = await self.read(path, limit=0)

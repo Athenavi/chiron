@@ -81,6 +81,7 @@ export default {
     result_load_full: "加载完整输出（原文 {size}）",
     result_loaded_all: "已加载完整输出",
     result_load_failed: "加载失败，可重试",
+    result_more_chars: "加载更多（还剩 {n} 字符）",
     n_items: "{n} 项",
     resend_in_n_s: "{n}s 后重发",
     year_month_day_hh_mm: "{year}年{month}月{day}日 {hh}:{mm}",

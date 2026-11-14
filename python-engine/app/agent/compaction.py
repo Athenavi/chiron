@@ -247,31 +247,323 @@ def _snip_tool_results(
     return result
 
 
-def _extractive_digest(messages: list[dict[str, Any]], max_chars: int = 1200) -> str:
-    """折叠区间的**提取式**摘要：每条消息取首行，拼成要点清单。
+#: 折叠摘要的**基础**字符预算与伸缩规则。
+#:
+#: 旧实现是固定 1800 字符 —— 折叠 10 条和折叠 200 条给同样篇幅，大区间必然被
+#: 大量丢弃。现在按折叠区间规模伸缩：每 10 条消息加 200 字符，封顶
+#: `_DIGEST_MAX_CHARS_CAP`。上限存在的理由：摘要最终要拼进上下文（见
+#: `_apply_folds`），无限增长等于用一个"新的大上下文"替换旧上下文。
+_DIGEST_BASE_CHARS = 1800
+#: 每这么多条消息，预算增加 `_DIGEST_PER_STEP_CHARS`。
+_DIGEST_STEP_MESSAGES = 10
+_DIGEST_PER_STEP_CHARS = 200
+#: 伸缩上限：再大的折叠区间也只给这么多。
+_DIGEST_MAX_CHARS_CAP = 4000
+#: 单条要点的上限。太短会把"改了哪个文件/报了什麼错"切掉，太长则几条就吃满预算。
+_DIGEST_LINE_CHARS = 240
+#: 超预算时「目标与约束」（头端）与「关键结论」（尾端）各自保留的预算份额。
+#:
+#: **必须双端保留**：头端是最初的需求与硬约束（"这个仓库绝不要动 vendor/"），
+#: 尾端是最近的进展。旧实现用 `"\n".join(parts)[:max_chars]` 从头截断 —— 靠后的
+#: 消息被整个丢掉，而那恰恰是最可能仍然生效的内容。
+#: 合计 0.70，其余留给「未决问题 / 已改文件 / 工具活动」与标题、省略标记。
+_DIGEST_HEAD_SHARE = 0.40
+_DIGEST_TAIL_SHARE = 0.30
 
-    与 `app.context.branch_condense.extractive_summary` 同一思路（那一个是分支压缩
-    的降级路径），但这里**不 import 它**：本模块是叶节点，顶层只依赖标准库，跨模块
-    引用会把"压缩"和"分支压缩"两条链路绑在一起 —— 后者改签名会连累前者。
+#: 既有摘要的识别标记。
+#:
+#: 滚动合并（方案 C）靠它把「上一轮生成的摘要」与「本轮新增折叠区间」区分开：
+#: 没有它，下一次压缩会把摘要**当成普通 user 消息再摘要一遍**，压几轮之后
+#: 内容严重失真 —— 长任务"跑久了就忘了原本要干什么"正是这样累积出来的。
+_FOLD_SUMMARY_MARKER = "[以下是本会话更早上下文的摘要"
 
-    为什么必须是提取式而不是写个占位串：`session_folds.digest` 的价值在于"事后能看出
-    这段上下文在谈什么"。写 `[5 message(s) folded]` 等于只记录条数，排查时毫无信息量，
-    却让字段看起来已经填过，反而掩盖了缺口。
+#: 折叠通知的识别标记（`_prune_messages` 插入的那句），不应被当作"用户约束"。
+_PRUNE_NOTICE_MARKER = "earlier message(s) were pruned"
 
-    真正的模型摘要需要在 async 层做（本函数是同步纯函数，还被当作 `on_overflow`
-    同步回调传入，接不了 await）。届时 `digest_model` 会从 `"extractive"` 变成真实
-    模型名，读方据此判断摘要质量 —— 这正是该字段存在的意义。
+
+def _digest_budget(n_messages: int) -> int:
+    """按折叠区间规模给出摘要预算（超上限即封顶）。"""
+    steps = max(0, n_messages) // _DIGEST_STEP_MESSAGES
+    return min(_DIGEST_MAX_CHARS_CAP, _DIGEST_BASE_CHARS + steps * _DIGEST_PER_STEP_CHARS)
+
+
+def _condense(text: str, limit: int) -> str:
+    """多行文本压成一行：去空行、折叠空白、超长截断。"""
+    flat = " ".join(part.strip() for part in text.splitlines() if part.strip())
+    flat = " ".join(flat.split())
+    return flat if len(flat) <= limit else flat[: limit - 1] + "…"
+
+
+def _tool_meta_index(messages: list[dict[str, Any]]) -> dict[str, tuple[str, str]]:
+    """`tool_call_id` → `(工具名, 关键参数原文)`。
+
+    tool 消息本身只有 `tool_call_id`，工具名在**配对的那条 assistant** 里。不建这张
+    索引，摘要里的工具行就只能是 `{"path": "src/…` 这种半截 JSON —— 事后完全看不出
+    当时调了什么、动了哪个文件。
+
+    与旧 `_tool_call_index` 的差别：那张表直接给出**渲染好的一行**，这张表给的是
+    结构化字段 —— 槽位聚合（"哪些文件被改过、各改了几次"）需要能按工具名分组。
     """
-    parts: list[str] = []
+    meta: dict[str, tuple[str, str]] = {}
+    for m in messages or []:
+        calls = m.get("tool_calls")
+        if not isinstance(calls, list):
+            continue
+        for call in calls:
+            if not isinstance(call, dict):
+                continue
+            call_id = str(call.get("id") or "")
+            fn = call.get("function")
+            if not call_id or not isinstance(fn, dict):
+                continue
+            name = str(fn.get("name") or "tool")
+            arg = ""
+            args = fn.get("arguments")
+            parsed: Any = None
+            if isinstance(args, str):
+                try:
+                    parsed = json.loads(args)
+                except (TypeError, ValueError):
+                    parsed = None
+            elif isinstance(args, dict):
+                parsed = args
+            if isinstance(parsed, dict):
+                for key in ("path", "file_path", "command", "query", "pattern"):
+                    value = parsed.get(key)
+                    if isinstance(value, str) and value.strip():
+                        arg = value.strip()
+                        break
+            meta[call_id] = (name, arg)
+    return meta
+
+
+def _tool_error(content: Any) -> str:
+    """工具结果里的错误文本（没有错误返回空串）。
+
+    只认 `{"error": ...}` 是不够的：命令失败时错误往往**只在 `stderr` 里**，
+    而 `exit_code` 非零但没有任何输出也很常见。这两种都必须被记进"未决问题"，
+    否则模型事后只知道"那步没成"，不知道成没成、为什么没成。
+    """
+    if not isinstance(content, str) or not content.strip():
+        return ""
+    try:
+        data: Any = json.loads(content.strip())
+    except (TypeError, ValueError):
+        return ""
+    if not isinstance(data, dict):
+        return ""
+    err = data.get("error")
+    if isinstance(err, str) and err.strip():
+        return err.strip()
+    stderr = data.get("stderr")
+    if isinstance(stderr, str) and stderr.strip():
+        return stderr.strip()
+    code = data.get("exit_code")
+    if isinstance(code, int) and code != 0:
+        return f"exit_code={code}"
+    return ""
+
+
+def _split_prior_summary(
+    messages: list[dict[str, Any]],
+) -> tuple[list[str], list[dict[str, Any]]]:
+    """拆出「上一轮摘要正文」与「本轮真正的新增消息」。
+
+    方案 C（滚动合并）的前提：既有摘要必须被**原样带走**，而不是和新消息一起
+    再摘要一遍。旧实现每折叠一次就把上一轮的摘要当普通 user 消息重新压缩 ——
+    压得越多衰减越狠，长任务跑到后面会丢掉最早的约束和最初的诉求。
+    """
+    prior: list[str] = []
+    fresh: list[dict[str, Any]] = []
     for m in messages or []:
         content = m.get("content")
+        if isinstance(content, str) and content.lstrip().startswith(_FOLD_SUMMARY_MARKER):
+            # 投影里的摘要是「指引行 + 空行 + 正文」，只保留正文。
+            parts = content.split("\n\n", 1)
+            if len(parts) == 2 and parts[1].strip():
+                prior.append(parts[1].strip())
+        else:
+            fresh.append(m)
+    return prior, fresh
+
+
+#: 产生"文件产物"的工具。摘要里对它们按路径聚合，而不是每次调用各记一行。
+_WRITE_TOOLS = frozenset({"write_file", "edit_file", "delete_file"})
+
+
+def _slot_collect(
+    messages: list[dict[str, Any]], meta: dict[str, tuple[str, str]]
+) -> list[tuple[str, list[str]]]:
+    """把消息分派进结构化槽位，返回按优先级排序的 `[(槽位名, 行列表)]`。
+
+    为什么不再逐条流水账：折叠区间里八成是工具回显，而真正必须活下来的只有
+    三类 —— "用户要求什么""哪些文件改了""还有什么没解决"。流水账让这三类信息
+    和一句寒暄权重相同，预算一紧就一起被挤掉；而同一文件被读十次会生成十行
+    噪音，把关键约束挤出预算。
+    """
+    constraints: list[str] = []
+    problems: list[str] = []
+    changed: dict[str, int] = {}
+    conclusions: list[str] = []
+    activity: dict[str, int] = {}
+
+    for msg in messages or []:
+        role = str(msg.get("role") or "user")
+        content = msg.get("content")
+
+        if role == "tool":
+            call_id = str(msg.get("tool_call_id") or "")
+            name, arg = meta.get(call_id, ("tool", ""))
+            activity[name] = activity.get(name, 0) + 1
+            if name in _WRITE_TOOLS and arg:
+                changed[arg] = changed.get(arg, 0) + 1
+            err = _tool_error(content)
+            if err:
+                label = f"{name} {arg}".strip()
+                problems.append(f"- {label} → 错误: {_condense(err, 160)}")
+            continue
+
+        if role == "assistant" and not (isinstance(content, str) and content.strip()):
+            # 只带 tool_calls 的 assistant：记下它调了什么，别让这一步凭空消失。
+            calls = msg.get("tool_calls")
+            if isinstance(calls, list) and calls:
+                names = [
+                    str(fn.get("name"))
+                    for c in calls
+                    if isinstance(c, dict)
+                    for fn in [c.get("function")]
+                    if isinstance(fn, dict) and fn.get("name")
+                ]
+                if names:
+                    conclusions.append(f"- 调用 {', '.join(names[:6])}")
+            continue
+
         if not isinstance(content, str) or not content.strip():
             continue
-        first_line = content.strip().splitlines()[0][:200]
-        parts.append(f"- [{m.get('role', 'user')}] {first_line}")
+
+        text = content.strip()
+        # 裁剪通知是**系统**产的，不是用户要求 —— 混进"目标与约束"会误导模型。
+        if _PRUNE_NOTICE_MARKER in text:
+            continue
+        if role == "user":
+            constraints.append(f"- {_condense(text, _DIGEST_LINE_CHARS)}")
+        else:
+            conclusions.append(f"- {_condense(text, _DIGEST_LINE_CHARS)}")
+
+    slots: list[tuple[str, list[str]]] = []
+    if constraints:
+        slots.append(("目标与约束", constraints))
+    if problems:
+        slots.append(("未决问题", problems))
+    if changed:
+        slots.append(
+            ("已改文件", [f"- {path}（{n} 次）" for path, n in sorted(changed.items())])
+        )
+    if conclusions:
+        slots.append(("关键结论", conclusions))
+    if activity:
+        ranked = sorted(activity.items(), key=lambda kv: (-kv[1], kv[0]))
+        slots.append(("工具活动", [f"- {name} × {n}" for name, n in ranked]))
+    return slots
+
+
+def _take_lines(lines: list[str], budget: int, *, from_tail: bool) -> list[str]:
+    """在预算内尽量多取行；从尾端取时最后恢复原顺序。"""
+    if budget <= 0 or not lines:
+        return []
+    picked: list[str] = []
+    used = 0
+    seq = reversed(lines) if from_tail else lines
+    for line in seq:
+        if used + len(line) + 1 > budget:
+            break
+        picked.append(line)
+        used += len(line) + 1
+    if from_tail:
+        picked.reverse()
+    return picked
+
+
+def _render_slots(slots: list[tuple[str, list[str]]], max_chars: int) -> str:
+    """把槽位装配成摘要；超预算时**保头保尾**，而不是从头截断。
+
+    头端是"目标与约束"（最初的要求与硬约束，丢了就再也找不回来），
+    尾端是"关键结论"（最近的进展，最可能仍然生效）。中间槽位（未决问题 /
+    已改文件 / 工具活动）按优先级吃剩余预算。
+    """
+    sections = [(name, f"## {name}\n" + "\n".join(lines), lines) for name, lines in slots]
+    joined = "\n\n".join(text for _name, text, _lines in sections)
+    if len(joined) <= max_chars:
+        return joined
+
+    by_name = {name: lines for name, _text, lines in sections}
+    head = _take_lines(
+        by_name.get("目标与约束", []), int(max_chars * _DIGEST_HEAD_SHARE), from_tail=False
+    )
+    tail = _take_lines(
+        by_name.get("关键结论", []), int(max_chars * _DIGEST_TAIL_SHARE), from_tail=True
+    )
+
+    # 头尾之外按槽位优先级填，留出标题与省略标记的余量。
+    spare = max_chars - (sum(len(x) + 1 for x in head) + sum(len(x) + 1 for x in tail)) - 200
+    middle: list[str] = []
+    dropped = 0
+    for name, text, _lines in sections:
+        if name in ("目标与约束", "关键结论"):
+            continue
+        if spare <= 0:
+            dropped += len(_lines)
+            continue
+        chunk = text if len(text) <= spare else text[:spare]
+        middle.append(chunk)
+        spare -= len(chunk) + 2
+
+    parts: list[str] = []
+    if head:
+        parts.append("## 目标与约束\n" + "\n".join(head))
+    parts.extend(middle)
+    if tail:
+        parts.append("## 关键结论\n" + "\n".join(tail))
+
     if not parts:
+        return joined[:max_chars]
+    if dropped:
+        parts.append(f"_（另有 {dropped} 条细节因预算省略）_")
+    return "\n\n".join(parts)
+
+
+def _extractive_digest(
+    messages: list[dict[str, Any]], max_chars: int | None = None
+) -> str:
+    """折叠区间的**本地**提取式摘要：结构化槽位 + 滚动合并。
+
+    三次重构留下的教训，逐条对应现在的做法：
+
+    1. **只取首行截 200 字符** → 工具结果首行几乎总是半截 JSON。现在按
+       `tool_call_id` 回查到工具名与参数，错误行优先露出（含 `stderr`、非零
+       `exit_code`）。
+    2. **`[:max_chars]` 从头截断** → 最近的进展被整个丢掉。现在保头保尾：
+       头端是约束，尾端是结论。
+    3. **不分角色不分工具** → 用户硬约束和寒暄权重相同。现在分槽位：
+       目标与约束 / 未决问题 / 已改文件 / 关键结论 / 工具活动，写操作按
+       路径聚合去重。
+    4. **摘要的摘要**（本轮新增）→ 每压一次衰减一层。现在先摘出既有摘要
+       原样带走，只对新增消息做提炼，两者合并输出。
+
+    保持**同步纯函数、只依赖标准库**：`_prune_messages` 是同步的，还被当作
+    `on_overflow` 同步回调传入，接不了 await。模型摘要另走
+    `runtime._upgrade_fold_digests`（需显式开启），本函数始终是**永远可用的本地保底**。
+    """
+    msgs = messages or []
+    budget = _digest_budget(len(msgs)) if max_chars is None else max_chars
+    prior, fresh = _split_prior_summary(msgs)
+    slots = _slot_collect(fresh, _tool_meta_index(fresh))
+    if prior:
+        # 既有摘要排最前：它包含最早的约束，不能被后加的槽位挤到预算之外。
+        slots.insert(0, ("既有摘要", prior))
+    if not slots:
         return ""
-    return "\n".join(parts)[:max_chars]
+    return _render_slots(slots, budget)
 
 
 def _prune_messages(

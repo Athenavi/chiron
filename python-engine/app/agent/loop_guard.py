@@ -17,6 +17,18 @@ agent 只是在反复调同一个工具、拿回同样的结果。它既烧钱�
 **命中后不静默杀死**：由调用方回灌一条结构化提示（重复了几次、结果是否相同），让模型有机会
 换策略；连续命中两次以上才终止该轮（接入点见 ``AgentRuntime.run``）。
 
+**"未执行"不算 repeat**（:meth:`LoopGuard.observe_skipped`）
+
+这是一条容易搞反的判据。``repeat`` 的本意是"它已经在反复做同一件**做过了的事**"；
+而"参数非法 JSON → 拒绝执行 → 模型补全参数重发"是完全正确的自纠行为 —— 第一次
+根本没动手，第二次是必要重试，把它判成死循环等于让自纠永远没有第二次机会。
+
+所以调用方在得知某次调用**没有真正执行**（参数截断被拒、并发批无法交互、计划重复）
+时要调 :meth:`observe_skipped`：撤回刚登记的那条调用记录，但**仍然登记结果哈希** ——
+这样"连续 N 次同样的失败"会落进 ``no_progress``（那才是真卡住，该换做法而不是重发）。
+
+被 ``repeat`` 自己拦下的调用**不能**撤回，否则它永远拦不住第二次。
+
 参数哈希复用 :func:`app.agent.tool_policy.args_hash` —— 与审批票据同一份归一化，
 避免"换个写法就绕开检测"（`./a.txt` vs `a.txt`）。
 """
@@ -95,13 +107,40 @@ class LoopGuard:
         ``args`` 可以是 dict，也可以是模型给的**原始 JSON 字符串**（内部解析；解析失败按空参数）
         —— 调用点就不必先解析一遍。
         """
+        self._calls.append(self._call_key(tool_name, args))
+        return self._detect_repeat() or self._detect_oscillation()
+
+    def _call_key(self, tool_name: str, args: Any) -> str:
+        """归一化调用指纹；`observe_call` / `observe_skipped` 必须用同一份。"""
         if isinstance(args, str):
             try:
                 args = json.loads(args)
             except Exception:  # noqa: BLE001 - 半截 JSON 按空参数（与栅栏的拒绝策略一致）
                 args = {}
-        self._calls.append(f"{tool_name}|{args_hash(tool_name, args)}")
-        return self._detect_repeat() or self._detect_oscillation()
+        return f"{tool_name}|{args_hash(tool_name, args)}"
+
+    def observe_skipped(self, tool_name: str, args: Any) -> bool:
+        """撤回"这次调用**没有真正执行**"占用的 repeat 计数；返回是否撤回成功。
+
+        用于参数非法 JSON 被拒、并发批无法交互等**未动手**的情形。
+
+        **为什么必须撤回**：模型补全被 `max_tokens` 截断的 arguments 再发一次，是
+        正确的自纠；连续几次被拒后重发同一调用，恰恰是它唯一可做的事。把这些算进
+        ``repeat``，第 3 次就会被判死循环、连执行机会都没有 —— 护栏反过来惩罚了自纠。
+
+        **为什么不动结果**：失败次数本身是有信息的，连续 M 次同样的拒绝说明"重发"
+        走不通、该换做法 —— 那由收尾处的 ``observe_result`` 照常抓（它的提示语是
+        "换策略"而非"别再重复"）。在这里重复登记结果会让一次调用算两次，
+        把 ``no_progress`` 的阈值提前一半触发。
+
+        只弹**最后一条且指纹相同**的记录：并发批里多个调用交错登记，
+        盲弹 tail 会把别人的记录弹掉。
+        """
+        key = self._call_key(tool_name, args)
+        if self._calls and self._calls[-1] == key:
+            self._calls.pop()
+            return True
+        return False
 
     def observe_result(self, result: Any) -> LoopVerdict:
         """登记一次工具结果，返回是否命中 no_progress。"""

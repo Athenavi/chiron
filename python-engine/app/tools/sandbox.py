@@ -483,11 +483,20 @@ FILE_LIMIT_BYTES = 10 * 1024 * 1024
 #
 # 对位 deepagents 的 `ExecuteOffloadResult`：**截断与退出码分开表达**。此前执行输出要么
 # 不截断（把整段塞进上下文），要么在工具层静默砍掉 —— 后者会让模型误判"输出就这么短"。
-#: 单次执行输出的字节上限
-MAX_EXECUTE_OUTPUT_BYTES = 512 * 1024
-#: 截断时保留的 head / tail 字节（中间省略并**显式标注**省略量）
-EXECUTE_HEAD_BYTES = 8 * 1024
-EXECUTE_TAIL_BYTES = 2 * 1024
+#
+# **阈值只有一套，在 `app/agent/result_compactor.py`**（INLINE_LIMIT 16KB 直接进上下文，
+# SUMMARY_LIMIT 256KB 以内做结构摘要，更大则摘要 + 落盘 `result_ref`）。这一层**不再**
+# 自行把输出砍成 8KB+2KB —— 那样做的话，一段 300KB 的构建日志会在到达 compactor 之前
+# 就被挖掉中段，而中段正是 error/warn 行所在的地方，摘要器再聪明也救不回来。
+#
+# 这里只保留**内存保护**这一项职责：输出大到会把进程撑爆时才动手，且此时仍要如实
+# 标注省略量。
+#: 单次执行输出的**内存**上限（超出才截断；正常治理交给 result_compactor）
+MAX_EXECUTE_OUTPUT_BYTES = 2 * 1024 * 1024
+#: 内存上限触发时保留的 head / tail 字节（中间省略并**显式标注**省略量）。
+#: 取得比 compactor 的 INLINE_LIMIT 大，是为了让摘要器仍有足够正文可挑 error/warn 行。
+EXECUTE_HEAD_BYTES = 64 * 1024
+EXECUTE_TAIL_BYTES = 16 * 1024
 
 
 def truncate_execute_output(text: str) -> tuple[str, bool]:

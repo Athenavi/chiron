@@ -13,6 +13,41 @@ from typing import Any
 
 from app.tools.registry import registry
 
+#: `edit_file` 愿意处理的文件大小上限。
+#:
+#: 编辑**必然**要全文精确内容（唯一性校验与替换都以它为准），这一步省不掉；
+#: 但可以省掉"把它读进内存然后 OOM"。超过上限时明确拒绝并指路，而不是
+#: 让进程在分配几 GB 字符串时被 OOM killer 干掉 —— 那种失败连错误信息都留不下。
+#:
+#: 8MB 的依据：文本源码/配置极少超过它；超过的多半是生成物、日志、数据文件，
+#: 那些本就该用脚本改或用 `write_file` 分块重写。
+EDIT_FILE_MAX_BYTES = 8 * 1024 * 1024
+
+#: 返回给模型的 diff 最多多少行。
+#:
+#: `difflib` 对"整体重写型"改动（如行区间替换整段）会输出全文 diff，
+#: 一个 5000 行文件的改动能让单条工具结果吃掉几十万字符 —— 恰好是最该省的地方。
+#: 超出时保留**头尾各一半**并明确标注省略量：改动开头与结尾通常正是判断
+#: 「改对没有」所需的证据。
+EDIT_DIFF_MAX_LINES = 400
+
+
+def _clip_diff(diff_text: str, max_lines: int = EDIT_DIFF_MAX_LINES) -> tuple[str, bool, int]:
+    """把超长 diff 折成头尾两段；返回 `(文本, 是否截断, 原始行数)`。"""
+    lines = diff_text.splitlines()
+    total = len(lines)
+    if total <= max_lines:
+        return diff_text, False, total
+    head_n = max_lines // 2
+    tail_n = max_lines - head_n
+    omitted = total - head_n - tail_n
+    clipped = [
+        *lines[:head_n],
+        f"… [{omitted} diff lines omitted — 文件已正确写入，这里只折叠了回显] …",
+        *lines[-tail_n:],
+    ]
+    return "\n".join(clipped), True, total
+
 
 async def edit_file(
     path: str,
@@ -38,6 +73,24 @@ async def edit_file(
     # schema 说它能改"path safety 的根"，实现根本不看它。已移除，免得模型以为能改根）
     target = safe_join(path)
 
+    # ── 大小闸门：**先看大小再读**，别把几百 MB 读进内存才拒绝 ──
+    # 编辑要全文精确内容，这步省不掉；但"读进来才发现该拒绝"会让进程在分配
+    # 巨型字符串时被 OOM 干掉 —— 那种失败连错误信息都留不下。
+    try:
+        info = await backend.stat(path)
+    except Exception:  # noqa: BLE001 — 后端不支持 stat 时退化为读后检查
+        info = None
+    if info is not None and getattr(info, "size", 0) > EDIT_FILE_MAX_BYTES:
+        return {
+            "error": (
+                f"文件过大（{info.size} 字节 > {EDIT_FILE_MAX_BYTES}），edit_file 不做全文编辑。"
+                "改用 write_file 分块重写、或先用脚本/命令处理；"
+                "若只是想看某段内容，用 read_file 的 offset/limit 或 grep_files 定位。"
+            ),
+            "size_bytes": info.size,
+            "max_bytes": EDIT_FILE_MAX_BYTES,
+        }
+
     # 批 B：读**全文原文**经后端（`limit=0` 的语义见 `ReadResult` 的文档）——
     # 这里不能用默认分页：唯一性校验与 diff 都要求完整且逐字节精确的内容。
     read = await backend.read(path, limit=0)
@@ -45,6 +98,15 @@ async def edit_file(
         return {"error": read.error}
 
     original = read.content
+    # 兜底：后端可能没有 stat（或报了 -1），读到超限同样拒绝，而不是继续做全文操作。
+    if len(original.encode("utf-8", errors="replace")) > EDIT_FILE_MAX_BYTES:
+        return {
+            "error": (
+                f"文件过大（超过 {EDIT_FILE_MAX_BYTES} 字节），edit_file 不做全文编辑。"
+                "改用 write_file 分块重写、或先用脚本/命令处理。"
+            ),
+            "max_bytes": EDIT_FILE_MAX_BYTES,
+        }
     original_lines = original.splitlines(keepends=True)
     new_lines: list[str] | None = None
 
@@ -116,13 +178,22 @@ async def edit_file(
         fromfile=f"a/{path}",
         tofile=f"b/{path}",
     )
-    diff_text = "".join(diff_lines)
+    diff_text, diff_clipped, diff_total = _clip_diff("".join(diff_lines))
 
     payload: dict[str, Any] = {
         "path": str(target),
         "success": True,
         "diff": diff_text,
     }
+    if diff_clipped:
+        # 明确区分"改动就这么多"与"回显被折叠"：文件已经**完整写入**，
+        # 折叠的只是回显。不说清楚，模型会以为自己的改动没生效而重写一遍。
+        payload["diff_truncated"] = True
+        payload["diff_total_lines"] = diff_total
+        payload["note"] = (
+            f"文件已完整写入；这里只折叠了回显（原 diff 共 {diff_total} 行，"
+            f"显示头尾各 {EDIT_DIFF_MAX_LINES // 2} 行）。"
+        )
     if undo_note:
         payload["undo_warning"] = undo_note
     return payload

@@ -71,6 +71,7 @@ export default {
     result_load_full: "تحميل الناتج الكامل (الأصل {size})",
     result_loaded_all: "تم تحميل الناتج الكامل",
     result_load_failed: "فشل التحميل — أعد المحاولة",
+    result_more_chars: "تحميل المزيد (بقي {n} حرفًا)",
     n_items: "{n} عنصر",
     resend_in_n_s: "إعادة الإرسال خلال {n} ث",
     year_month_day_hh_mm: "{year}-{month}-{day} {hh}:{mm}",

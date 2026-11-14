@@ -89,6 +89,12 @@ class CompositeBackend:
         backend, inner = self._resolve(path)
         return await backend.write(inner, content)
 
+    async def append(self, path: str, content: str) -> WriteResult:
+        # 委托给**解析后的同一个后端**：追加与写入必须落在同一处，
+        # 否则分块写的第二块可能飞到另一个挂载点上去。
+        backend, inner = self._resolve(path)
+        return await backend.append(inner, content)
+
     async def edit(self, path: str, old: str, new: str) -> EditResult:
         backend, inner = self._resolve(path)
         return await backend.edit(inner, old, new)

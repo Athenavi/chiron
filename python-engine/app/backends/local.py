@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 from pathlib import Path
 
@@ -138,6 +139,55 @@ def _read_window_uncounted(target: Path, offset: int, limit: int) -> tuple[list[
     return page, more
 
 
+def _atomic_write_text(target: Path, content: str) -> None:
+    """原子替换写：临时文件 + `os.replace`。
+
+    临时文件必须落在**同一目录**：跨文件系统的 `os.replace` 不是原子操作（底层退化成
+    拷贝 + 删除），那就失去了这么写的意义。名字带 pid 是为了并发写不同文件时互不干扰；
+    同一文件的并发写本来就该由上层（`fs_guard`）串行化，这里不重复加锁。
+
+    失败时清理临时文件 —— 否则一次磁盘满会在工作区里留下一堆 `.tmp` 垃圾，还会被
+    `grep`/`ls` 扫到，干扰模型判断。
+    """
+    tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8", newline="") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, target)
+    except OSError:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+
+
+def _append_text(target: Path, content: str) -> tuple[int, bool]:
+    """追加写，返回 `(本次写入字节数, 是否补了换行)`。
+
+    已有文件若不以换行结尾，直接追加会让新内容粘在最后一行上：模型按"多块拼一个
+    文件"的方式写代码时，第二块的首行会跑到第一块末行的后面，拼出来的文件与它预期
+    的差一个换行，随后的 `edit_file` 精确匹配就会失败。补一个换行让分块写的**结果**
+    与"一次写完"一致。
+    """
+    padded = False
+    needs_newline = False
+    if target.exists() and target.stat().st_size > 0:
+        with open(target, "rb") as probe:
+            probe.seek(-1, os.SEEK_END)
+            needs_newline = probe.read(1) not in (b"\n", b"\r")
+    with open(target, "a", encoding="utf-8", newline="") as handle:
+        if needs_newline:
+            handle.write("\n")
+            padded = True
+        handle.write(content)
+        handle.flush()
+        os.fsync(handle.fileno())
+    return len(content.encode("utf-8")) + (1 if padded else 0), padded
+
+
 class LocalWorkspaceBackend:
     """`sandbox.safe_join` + 本地文件系统。"""
 
@@ -226,10 +276,41 @@ class LocalWorkspaceBackend:
         return FileStat(path=str(target), size=info.st_size, is_file=is_file)
 
     async def write(self, path: str, content: str) -> WriteResult:
+        """写文件（**原子替换**）。
+
+        `pathlib.write_text` 是"先截断再写"：写到一半失败（磁盘满、进程被杀、容器被
+        回收）会留下**半截文件**，而 undo 快照已经记成"写之前的状态"，回滚也救不回
+        中间态。长任务里文件被反复重写，撞上的概率不低。
+
+        改用"写临时文件 → `os.replace` 原子换名"：目标文件在任何时刻要么是旧的完整
+        内容、要么是新的完整内容，不存在半截态。临时文件放在**同一目录**（跨文件系统
+        的 `os.replace` 会降级成非原子的拷贝）；失败时清理临时文件，不留垃圾。
+        """
         target = safe_join(path)
         await asyncio.to_thread(target.parent.mkdir, parents=True, exist_ok=True)
-        await asyncio.to_thread(target.write_text, content, encoding="utf-8")
-        return WriteResult(path=str(target), bytes_written=len(content.encode("utf-8")))
+        data = content.encode("utf-8")
+        try:
+            await asyncio.to_thread(_atomic_write_text, target, content)
+        except OSError as exc:
+            return WriteResult(path=str(target), error=str(exc))
+        return WriteResult(path=str(target), bytes_written=len(data))
+
+    async def append(self, path: str, content: str) -> WriteResult:
+        """把 `content` 追加到文件末尾（不存在则创建）。
+
+        用 `open(..., "a")` 而不是"读全文 + 拼 + 重写"：大文件下后者要先把整个文件
+        读进内存、再写一遍（O(2N)），而追加的语义本来就只需要动末尾。
+
+        **不做原子替换**：追加的中间态是"已有内容 + 一部分新内容"，它在语义上可接受
+        （不像整篇重写会先清空原有内容）。`a` 模式依赖 O_APPEND 把每次写入落在末尾。
+        """
+        target = safe_join(path)
+        await asyncio.to_thread(target.parent.mkdir, parents=True, exist_ok=True)
+        try:
+            written, _padded = await asyncio.to_thread(_append_text, target, content)
+        except OSError as exc:
+            return WriteResult(path=str(target), error=str(exc))
+        return WriteResult(path=str(target), bytes_written=written)
 
     async def edit(self, path: str, old: str, new: str) -> EditResult:
         target = safe_join(path)
