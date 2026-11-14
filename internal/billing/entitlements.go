@@ -56,7 +56,7 @@ type EntitlementStore interface {
 	// ActiveEntitlements 返回用户在 now 时刻仍有效的权益（expires_at > now）。
 	ActiveEntitlements(ctx context.Context, userID string, now time.Time) ([]Entitlement, error)
 	// ExpiringEntitlements 返回在 (now, now+withinDays] 内到期、且当前仍有效的权益。
-	// 供到期预警扫描使用（P2-3）：**跨全部用户**，不做 user 过滤。
+	// 供到期预警扫描使用：**跨全部用户**，不做 user 过滤。
 	ExpiringEntitlements(ctx context.Context, now time.Time, withinDays int) ([]Entitlement, error)
 	// ListPackages 返回某租户可见的已上架套餐（本租户 + 平台默认），按 sort_order 排序。
 	ListPackages(ctx context.Context, tenantID int) ([]Package, error)
@@ -64,7 +64,7 @@ type EntitlementStore interface {
 	// 只返回生效中的会让"已过期"和"从未购买"在界面上无法区分。
 	UserEntitlements(ctx context.Context, userID string) ([]Entitlement, error)
 
-	// ── 管理端（P2-2c）──
+	// ── 管理端──
 
 	// AdminListPackages 返回**本租户**的全部套餐（含已下架），供租户后台使用。
 	// 与 ListPackages 刻意分开：后者是用户侧视图（enabled=true 才有意义），
@@ -177,7 +177,7 @@ func (s *PGStore) ActiveEntitlements(ctx context.Context, userID string, now tim
 
 // ExpiringEntitlements 返回在 (now, now+withinDays] 内到期、且当前仍有效的权益。
 //
-// 跨全部用户扫描，供到期预警（P2-3）使用。三条边界都要写清：
+// 跨全部用户扫描，供到期预警使用。三条边界都要写清：
 //   - `expires_at > now`：已过期的不再预警。过期后权益已失效，再发"即将到期"
 //     是错误信息；过期提示由"我的套餐"页与模型准入的 403 承担。
 //   - `expires_at <= now + withinDays`：只取窗口内的。
@@ -350,7 +350,7 @@ func (m *Manager) grantEntitlementForPayment(ctx context.Context, p *Payment) *E
 	return e
 }
 
-// ── 套餐目录管理端（P2-2c）────────────────────────────────────────────────
+// ── 套餐目录管理端────────────────────────────────────────────────
 
 // ErrPackageCodeExists 表示套餐 code 已被占用（撞 `ux_billing_packages_code`）。
 //

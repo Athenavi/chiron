@@ -15,7 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-// P1-④ 批 B：租户/用户级 harness 配置端点。
+// P1-④ 租户/用户级 harness 配置端点。
 //
 // 三条关键语义：
 //  1. **身份只来自 token** —— 请求体里的 tenant_id/user_id 一律忽略（防越权主开关）；

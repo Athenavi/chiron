@@ -1,4 +1,4 @@
-"""批 G：单个 hook 的沙箱执行（方案 03 §3.2 —— 复用 `plugin_runner.py` 的既有模式）。
+"""单个 hook 的沙箱执行 —— 复用 `plugin_runner.py` 的既有模式。
 
 **不新造沙箱**：与 `app/api/plugins.py:run_plugin_in_sandbox` 同一套隔离 ——
 独立 subprocess（`sys.executable plugin_runner.py`）+ 子进程内 `setrlimit`
@@ -52,7 +52,12 @@ _HOOK_MAX_MEMORY_MB = 128
 _HOOK_MAX_CPU_SECONDS = 5.0
 
 #: python 形态的 stdout 体积上限，防 hook 刷屏撑爆宿主内存。
+#: `command` / `webhook` 形态共用同一预算 —— 三条形态对"能吐多少"必须一致，
+#: 否则运维换个形态就能绕过限制。
 _MAX_OUTPUT_BYTES = 262_144  # 256 KiB
+#: 触发截断时保留的 head / tail（占预算的比例与工具执行一致：3/4 + 1/4）。
+_HOOK_HEAD_BYTES = _MAX_OUTPUT_BYTES * 3 // 4
+_HOOK_TAIL_BYTES = _MAX_OUTPUT_BYTES // 4
 
 #: python-engine 根目录下的 `plugin_runner.py`（复用同一 runner，不复制一份）。
 _RUNNER_PATH = Path(__file__).resolve().parents[2] / "plugin_runner.py"
@@ -367,8 +372,18 @@ async def run_command_hook(
         )
 
     exit_code = proc.returncode
-    stdout_text, stdout_truncated = truncate_execute_output(stdout.decode("utf-8", errors="replace"))
-    stderr_text, stderr_truncated = truncate_execute_output(stderr.decode("utf-8", errors="replace"))
+    stdout_text, stdout_truncated = truncate_execute_output(
+        stdout.decode("utf-8", errors="replace"),
+        max_bytes=_MAX_OUTPUT_BYTES,
+        head_bytes=_HOOK_HEAD_BYTES,
+        tail_bytes=_HOOK_TAIL_BYTES,
+    )
+    stderr_text, stderr_truncated = truncate_execute_output(
+        stderr.decode("utf-8", errors="replace"),
+        max_bytes=_MAX_OUTPUT_BYTES,
+        head_bytes=_HOOK_HEAD_BYTES,
+        tail_bytes=_HOOK_TAIL_BYTES,
+    )
     truncated = stdout_truncated or stderr_truncated
 
     if exit_code == BLOCK_EXIT_CODE:

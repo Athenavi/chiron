@@ -72,7 +72,7 @@ function mountView() {
   return mount(MemoryView, { global: { plugins: [router] } })
 }
 
-describe('项目选择器（C3）', () => {
+describe('项目选择器', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     localStorage.clear()

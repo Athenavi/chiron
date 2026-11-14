@@ -10,7 +10,7 @@ import (
 	"github.com/athenavi/chiron/internal/notify"
 )
 
-// NotificationHandler 提供通知中心的用户侧接口（P2-3）。
+// NotificationHandler 提供通知中心的用户侧接口。
 //
 // 全部路由都只操作**当前登录用户自己的**通知：user_id 一律取自 claims，
 // 不接受请求体或 query 传入的 user_id —— 否则任何人只要猜到一个 UUID 就能读

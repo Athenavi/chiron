@@ -23,10 +23,10 @@ func registerAdminRoutes(
 	quotaHandler *QuotaHandler,
 ) {
 	// Admin routes (auth + admin permission + rate limit)
-	// P1-3: 所有 admin 路由必须挂限流，防止被劫持的 admin token 无限调用
+	// 所有 admin 路由必须挂限流，防止被劫持的 admin token 无限调用
 	// 造成破坏（backup/restore/users DELETE 等敏感操作）。
 	// 读操作用 PermAdminRead，写操作（PUT/DELETE/POST）必须 PermAdminWrite。
-	// P1-4: 用户管理路由（PUT/DELETE /v1/admin/users）必须 PermUsersManage，
+	// 用户管理路由（PUT/DELETE /v1/admin/users）必须 PermUsersManage，
 	// 该权限仅 owner 角色持有，普通 admin 不应能删/改用户。
 	adminReadMW := RequirePermission(auth.PermAdminRead)
 	adminWriteMW := RequirePermission(auth.PermAdminWrite)
@@ -37,7 +37,7 @@ func registerAdminRoutes(
 	usersManageMW := RequirePermission(auth.PermUsersManage)
 	adminMux := http.NewServeMux()
 	adminHandler.RegisterRoutes(adminMux)
-	// 发票审核（P1-2 / roadmap §11.4）：注册在 adminMux 内部，才能拿到 {id} 路径参数
+	// 发票审核：注册在 adminMux 内部，才能拿到 {id} 路径参数
 	// （外层 mux 已按 /v1/admin 前缀统一套了 authMW + 权限），用法与 adminHandler 一致。
 	invoiceHandler.RegisterAdminRoutes(adminMux)
 	// 套餐目录已改为租户级（/v1/tenant/packages），平台后台不再提供管理入口。
@@ -56,7 +56,7 @@ func registerAdminRoutes(
 	mux.Handle("GET /v1/admin/usage/catalog", authMW(rlMW(adminReadMW(adminStrip))))
 	// 租户级用量：本租户按天/模型/成员（平台侧只允许租户级）。
 	mux.Handle("GET /v1/tenant/usage/catalog", authMW(rlMW(adminReadMW(http.HandlerFunc(adminHandler.GetTenantUsageCatalog)))))
-	// 新用户引导漏斗（P0-3 验收「完成率可查」）—— 只读统计，与其它 admin 读端点同口径。
+	// 新用户引导漏斗—— 只读统计，与其它 admin 读端点同口径。
 	mux.Handle("GET /v1/admin/onboarding/funnel", authMW(rlMW(adminReadMW(adminStrip))))
 	// 注销归档的运维/合规通道。
 	//
@@ -100,7 +100,7 @@ func registerAdminRoutes(
 	// Database admin routes（/admin/datastores?tab=database 整页依赖它们）
 	// 同样的问题：handler 早在 adminMux 里注册（admin_ops.go:47-53），但从未暴露 ⇒
 	// 「数据库状态 / 配置 / 查询 / 优化」四个端点全部 404。
-	// 判据照本文件既定口径（见文件头 P1-3）：GET 用 adminReadMW；
+	// 判据照本文件既定口径（见文件头）：GET 用 adminReadMW；
 	// 任意 SELECT、VACUUM/ANALYZE 都是**写操作** ⇒ 一律 adminWriteMW。
 	// 备份 / 恢复端点已移除：企业部署用云数据库（快照/PITR），容器内 pg_dump/psql 不适用。
 	mux.Handle("GET /v1/admin/database/status", authMW(rlMW(platformReadMW(adminStrip))))
@@ -170,11 +170,11 @@ func registerAdminRoutes(
 	mux.Handle("PUT /v1/tenant/site-config", authMW(rlMW(adminWriteMW(http.HandlerFunc(adminHandler.SaveTenantSiteConfig)))))
 	mux.Handle("POST /v1/tenant/site-icon", authMW(rlMW(adminWriteMW(http.HandlerFunc(adminHandler.UploadTenantSiteIcon)))))
 
-	// 发票审核（P1-2 / roadmap §11.4）：handler 早已注册在 adminMux（invoice_handler.go
+	// 发票审核：handler 早已注册在 adminMux（invoice_handler.go
 	// 的 RegisterAdminRoutes），但外层 mux 从未暴露这两个 pattern ⇒ 前端 InvoiceReviewView
 	// 一打开就 404「请求的资源不存在」。读用 adminReadMW；审核是写操作 ⇒ adminWriteMW。
 	mux.Handle("GET /v1/admin/invoices", authMW(rlMW(adminReadMW(adminStrip))))
-	// 发票导出（P1-8）：与列表同口径（status 过滤 + 时间范围），复用 BOM 与
+	// 发票导出：与列表同口径（status 过滤 + 时间范围），复用 BOM 与
 	// 公式注入防护。平台导全量，租户只导本租户 —— tenant_id 取自 claims。
 	mux.Handle("GET /v1/admin/invoices.csv", authMW(rlMW(adminReadMW(http.HandlerFunc(invoiceHandler.ExportAdmin)))))
 	mux.Handle("POST /v1/admin/invoices/{id}/review", authMW(rlMW(adminWriteMW(adminStrip))))
@@ -183,7 +183,7 @@ func registerAdminRoutes(
 	mux.Handle("GET /v1/tenant/invoices.csv", authMW(rlMW(adminReadMW(http.HandlerFunc(invoiceHandler.ExportTenant)))))
 	mux.Handle("POST /v1/tenant/invoices/{id}/review", authMW(rlMW(adminWriteMW(http.HandlerFunc(invoiceHandler.TenantReview)))))
 
-	// 套餐目录 CRUD（P2-2c / roadmap §13.5 第 1 项）。
+	// 套餐目录 CRUD。
 	// 套餐目录：租户级（每个租户一套定价与权益），平台后台不再提供管理页。
 	// 数据按 claims.tenant_id 隔离，admin 角色即可维护。
 	mux.Handle("GET /v1/tenant/packages", authMW(rlMW(adminReadMW(http.HandlerFunc(billingHandler.AdminListPackages)))))
@@ -215,7 +215,7 @@ func registerAdminRoutes(
 	// 与上面 redis/database/models/settings 是**同一个坑的第四次**：handler 早已
 	// 注册在 adminMux（admin_ops.go 的 registerOpsRoutes），但从未在此暴露到外部
 	// mux ⇒ 前端 CronView / DomainManagementView / TenantManagementView 恒 404。
-	// 鉴权口径沿用文件头 P1-3：GET 用 adminReadMW；创建/修改/删除/触发（含发信、
+	// 鉴权口径沿用文件头 GET 用 adminReadMW；创建/修改/删除/触发（含发信、
 	// 签发 SSL、写 DB）一律 adminWriteMW。
 	mux.Handle("GET /v1/admin/tenants", authMW(rlMW(platformReadMW(adminStrip))))
 	mux.Handle("POST /v1/admin/tenants", authMW(rlMW(platformWriteMW(adminStrip))))
@@ -224,7 +224,7 @@ func registerAdminRoutes(
 	mux.Handle("POST /v1/admin/tenants/{id}/suspend", authMW(rlMW(platformWriteMW(adminStrip))))
 	mux.Handle("GET /v1/admin/tenants/{id}/usage", authMW(rlMW(platformReadMW(adminStrip))))
 
-	// 租户级 harness 配置（P1-④ 批 B）：读用 adminReadMW；**写用 PermPolicyManage**
+	// 租户级 harness 配置：读用 adminReadMW；**写用 PermPolicyManage**
 	// —— 它决定该租户所有会话的 system prompt，属"策略"而非"日常运维"。
 	harnessAdminHandler := NewHarnessProfileHandler(pgEntStore{}, notifyHarnessProfileChanged)
 	policyManageMW := RequirePermission(auth.PermPolicyManage)
@@ -247,7 +247,7 @@ func registerAdminRoutes(
 	mux.Handle("POST /v1/admin/invites", authMW(rlMW(adminWriteMW(adminStrip))))
 	mux.Handle("DELETE /v1/admin/invites/{code}", authMW(rlMW(adminWriteMW(adminStrip))))
 
-	// 团队与成员（C1 / roadmap §12.4）。
+	// 团队与成员。
 	// **不接收请求体里的 tenant_id**：租户一律取当前登录者的（GetTenantID）。
 	// 成员写操作收紧到 PermUsersManage（与 PUT/DELETE /users/{id} 同口径）——
 	// 改别人的角色、把成员踢出去，都属于"用户管理"而不是普通 admin 写操作。

@@ -1635,7 +1635,7 @@ def _new_memory_entry(
     embedding: list[float] | None,
     project: str = "",
 ) -> Any:
-    """构造 L2 条目（延迟导入，避免模块级循环依赖）。project 空 = 未分组（C3）。"""
+    """构造 L2 条目（延迟导入，避免模块级循环依赖）。project 空 = 未分组。"""
     from app.memory.layers import MemoryEntry
 
     return MemoryEntry(

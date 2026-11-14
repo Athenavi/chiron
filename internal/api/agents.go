@@ -165,7 +165,7 @@ func (h *AgentHandler) seedPresetAgents() {
 
 // List 返回当前租户内「我能用」的全部 Agent（按创建时间倒序）。
 //
-// 可见性口径（C1-5 / roadmap §12.4 第 5 步）：**公开的归团队、私有的归个人**。
+// 可见性口径：**公开的归团队、私有的归个人**。
 //   - 自己创建的：无论 visibility 是什么都可见；
 //   - 别人创建的：只有 visibility = 'tenant' 才可见。
 //

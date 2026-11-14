@@ -1,5 +1,5 @@
 # 队列消费者 — Redis Streams Consumer Group
-# P1-2: 信号处理与优雅关闭 (生产安全检查 2026-08-17)
+# 信号处理与优雅关闭 (生产安全检查 2026-08-17)
 from __future__ import annotations
 
 import asyncio
@@ -71,7 +71,7 @@ return 0
 """
 
 
-# ── 延迟重试（P2-3）─────────────────────────────────────────────────────────
+# ── 延迟重试─────────────────────────────────────────────────────────
 #
 # 为什么需要：`agent_followup` 最常见的失败不是"任务本身有问题"，而是**父会话此刻正忙**
 # （会话运行锁 409）。原来的重试是"立刻放回队尾"——3 次重试预算在毫秒级耗尽，随后进 DLQ，
@@ -170,14 +170,14 @@ class QueueWorker:
         self._consumer_name = f"{CONSUMER_PREFIX}-{id(self):x}"
         self._reclaim_task: asyncio.Task[Any] | None = None
         self._delay_task: asyncio.Task[Any] | None = None
-        #: Super-agent 看门狗的定时循环（P1-3）。**默认不创建** —— 见 `start()`。
+        #: Super-agent 看门狗的定时循环。**默认不创建** —— 见 `start()`。
         self._watchdog_task: asyncio.Task[Any] | None = None
 
     async def start(self) -> None:
         """启动消费者"""
         self._running = True
 
-        # P1-2: 注册信号处理器（支持 SIGTERM/Kill -15）
+        # 注册信号处理器（支持 SIGTERM/Kill -15）
         await self._register_signal_handlers()
 
         # 确保 Consumer Group 存在
@@ -205,7 +205,7 @@ class QueueWorker:
         self._delay_task = asyncio.create_task(self._delay_loop())
         logger.info("Queue worker delayed-retry loop started (every %.0fs)", DELAY_LOOP_SECS)
 
-        # Super-agent 看门狗（P1-3）：**只有显式开启才创建**任务。
+        # Super-agent 看门狗：**只有显式开启才创建**任务。
         # 关掉时连一个空转的协程都没有 —— "关掉它时零影响"是硬要求，不是"影响很小"。
         self._start_watchdog()
 
@@ -247,7 +247,7 @@ class QueueWorker:
                 await asyncio.sleep(1)
 
     async def stop(self) -> None:
-        """P1-2: 优雅停止（带超时保护）"""
+        """优雅停止（带超时保护）"""
         self._running = False
         if self._reclaim_task is not None:
             self._reclaim_task.cancel()
@@ -263,7 +263,7 @@ class QueueWorker:
             len(self._in_flight),
         )
         if self._in_flight:
-            # P1-2: 设置超时，防止 task 永久挂起
+            # 设置超时，防止 task 永久挂起
             try:
                 await asyncio.wait_for(
                     asyncio.gather(*self._in_flight, return_exceptions=True),
@@ -278,7 +278,7 @@ class QueueWorker:
         logger.info("Queue worker stopped")
 
     async def _register_signal_handlers(self) -> None:
-        """P1-2: 注册 UNIX 信号处理器（Kubernetes Docker Pod 兼容）"""
+        """注册 UNIX 信号处理器（Kubernetes Docker Pod 兼容）"""
         loop = asyncio.get_event_loop()
 
         def _signal_handler() -> None:
@@ -484,7 +484,7 @@ class QueueWorker:
             pass  # 计数键由 TTL 兜底
 
     def _start_watchdog(self) -> None:
-        """按配置拉起 Super-agent 看门狗（P1-3）。
+        """按配置拉起 Super-agent 看门狗。
 
         两道闸都读配置：``enabled`` 决定"要不要跑"，``act`` 决定"判断出来是否动手"。
         ``enabled=False`` 时**不创建任务** —— 关掉它必须是真的零影响，而不是"影响很小"。
@@ -936,7 +936,7 @@ class QueueWorker:
     async def _notify_job_finished(
         self, payload: dict[Any, Any], res: dict[str, Any]
     ) -> None:
-        """后台命令结束 → 请网关在源会话上开新一轮（P0-1）。
+        """后台命令结束 → 请网关在源会话上开新一轮。
 
         复用 agent_followup 那条已验证的通道（幂等 + 限流 + 会话锁 + 计费预检全在网关），
         不另造一套。**取消不发**：那是用户自己停的，再唤起一轮只是噪音。

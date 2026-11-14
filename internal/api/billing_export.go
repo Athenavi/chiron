@@ -14,7 +14,7 @@ import (
 	"github.com/athenavi/chiron/internal/db"
 )
 
-// billing_export.go —— 交易明细 CSV 导出（P1-1 / roadmap §10.2）。
+// billing_export.go —— 交易明细 CSV 导出。
 //
 // 为什么不用现成的 GetHistory：它是 `ORDER BY created_at DESC LIMIT 50` 且不接受
 // 时间范围与分页参数，是给「页面看最近 50 条」用的。导出要的是**按时间范围全量**
@@ -46,7 +46,7 @@ var utf8BOM = []byte{0xEF, 0xBB, 0xBF}
 // exportCSVHeader 是表头。
 //
 // 时间列显式标注 UTC：`credit_transactions.created_at` 是 `timestamp`（无时区，
-// 见 roadmap §10.2 与 D 组 L4-3），pgx 扫出来按 UTC 解释。不标清楚，跨时区
+// pgx 扫出来按 UTC 解释。不标清楚，跨时区
 // 对账会差几个小时，而用户没有任何线索知道差在哪。
 var exportCSVHeader = []string{"时间(UTC)", "事由", "金额", "余额快照", "关联轮次"}
 

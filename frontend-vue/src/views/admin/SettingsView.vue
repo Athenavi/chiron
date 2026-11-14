@@ -944,7 +944,7 @@ onMounted(async () => {
         </Card>
       </TabPane>
 
-      <!-- 行为塑形（P1-④ 批 B）：租户级默认，对所有匹配该前缀的会话生效 -->
+      <!-- 行为塑形：租户级默认，对所有匹配该前缀的会话生效 -->
       <TabPane
         key="harness"
         :tab="$t('settings.harness_title')"

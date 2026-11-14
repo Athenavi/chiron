@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// invoice_export_test.go —— 发票 CSV 导出的纯函数契约（P1-8）。
+// invoice_export_test.go —— 发票 CSV 导出的纯函数契约。
 //
 // 这里只测不依赖数据库的部分：表头与行列数一致、用户可控文本走公式注入防护、
 // 金额列保持数值、分转元不丢精度。数据库路径（count 先行、租户隔离）

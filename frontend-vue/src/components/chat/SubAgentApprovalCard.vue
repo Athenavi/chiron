@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 子 Agent 工具确认卡片（P3-后续）。
+ * 子 Agent 工具确认卡片。
  *
  * 为什么需要它：子 Agent 默认 `tools_mode=auto`，而 `shell_exec` 这类工具在 auto 下
  * 就需要确认 —— 所以"子 Agent 请求批准"几乎每次调用命令类工具都会发生。此前它只以

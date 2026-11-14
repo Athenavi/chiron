@@ -13,7 +13,7 @@ import (
 	"github.com/athenavi/chiron/internal/db"
 )
 
-// P1-1 投递层（roadmap P1-1.1）。
+// P1-1 投递层。
 //
 // 裁决是**串行排队**：同一会话短时间收到多个 thread 事件时进队列，跑完一个接着下一个。
 // 执行侧一行不改 —— `agent:run-lock:<session_id>` 仍是唯一的并发护栏，所以这一层
@@ -114,7 +114,7 @@ type threadDelivery struct {
 // errNoPendingDelivery 表示该会话队列已空。**不是**错误情况，调用方照常收尾即可。
 var errNoPendingDelivery = errors.New("no pending thread delivery")
 
-// threadDeliveryRoutedAudit 是每次入站都会写的一条路由埋点（roadmap §6 的那组对照数据）。
+// threadDeliveryRoutedAudit 是每次入站都会写的一条路由埋点。
 //
 // 记在**每一次**投递上而不是只在"被订阅改投"时记：要对比"有订阅 / 无订阅两种配置下的
 // 决定数"，缺了无订阅那一半就没有分母，只剩一个百分比而没有总量。
@@ -125,7 +125,7 @@ const threadDeliveryRoutedAudit = "superagent.thread.routed"
 // 返回 `(最终会话, 是否由订阅决定)`。
 //
 // 语义按 2026-11-04 的兼容取舍：**有 active 订阅则改投订阅指向的会话；无订阅则维持
-// 入口给的会话**。roadmap 投递路径第 2 步写的是"无订阅则该事件到此为止"，但库里
+// 入口给的会话**。投递路径第 2 步写的是"无订阅则该事件到此为止"，但库里
 // 此刻一条订阅都没有，照字面做等于让现存的子 Agent / job 回投全部静默停摆 ——
 // 那不是安全的默认值，是停机。等订阅在真实使用中出现、对照埋点也拿到了数据，
 // 再单独一批收紧成"无订阅即止"。
@@ -356,7 +356,7 @@ func enqueueThreadDelivery(ctx context.Context, p threadEnqueueParams) (threadDe
 		return threadDeliverDropped, "", p.SessionID, scanErr
 	}
 
-	// 订阅解析（roadmap 投递路径第 2 步，按 2026-11-04 的兼容取舍落在 A 方案）：
+	// 订阅解析：
 	// 有 active 订阅则按订阅改投目标会话；无订阅**维持今日行为**（投给入口给的会话），
 	// 并打一条 no-subscription 埋点。严格照文档做"无订阅即止"会让现存的子 Agent /
 	// job 回投全部静默停摆 —— 库里此刻一条订阅都没有，那不是安全的默认值，是停机。

@@ -72,7 +72,7 @@ def to_tenant_int(value: Any) -> int:
 
 
 def get_project() -> str:
-    """当前工作台选中的**项目**（C3）。
+    """当前工作台选中的**项目**。
 
     记忆（L2 条目）按 `tenant + user + project` 隔离 —— **空串 = 未分组**（缺省）。
     由 runtime 在 run 开始时从 `task.workbench_context["project"]` 写入，工具侧只读。

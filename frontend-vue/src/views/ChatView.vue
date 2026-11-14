@@ -529,7 +529,7 @@ function ensureApprovalTimer() {
 }
 
 /**
- * 提交审批决定。`editedArguments`（C5）非空 ⇒ "**编辑后批准**"：
+ * 提交审批决定。`editedArguments`非空 ⇒ "**编辑后批准**"：
  * 回传 `decision: 'edit'` 与编辑后的完整参数，由引擎重跑工具分级
  * （级别升高则不执行）—— 前端**不做**本地放行判断，那会是第二份分级表。
  */
@@ -2234,7 +2234,7 @@ const {
 let streamBuf = ''
 let streamTextId = ''
 let streamReasonId = ''
-// 本轮 `turn_stats` 条目的 id：引擎的 `usage` 是**每次 LLM 调用**一条（C3），
+// 本轮 `turn_stats` 条目的 id：引擎的 `usage` 是**每次 LLM 调用**一条，
 // 一次提交可能有很多条（多步 ReAct 每个工具步都有一次调用），必须**累加进同一条**，
 // 否则一个回合会在记录里堆出 N 行"本轮用量"。
 let streamStatsId = ''

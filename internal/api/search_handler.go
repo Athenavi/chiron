@@ -41,7 +41,7 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 		BadRequest(w, "search query too long (max 200 characters)")
 		return
 	}
-	// 多租户隔离修复（P0-S4）：必须按当前租户+用户过滤，否则任一租户用户可全文搜索全库。
+	// 多租户隔离修复：必须按当前租户+用户过滤，否则任一租户用户可全文搜索全库。
 	claims := auth.GetClaims(r.Context())
 	if claims == nil || claims.TenantID == 0 {
 		Unauthorized(w, "missing tenant context")

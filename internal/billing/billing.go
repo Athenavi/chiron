@@ -77,7 +77,7 @@ type Manager struct {
 	closeOnce sync.Once
 	wg        sync.WaitGroup // waits for dispatch goroutine to exit
 	balances  sync.Map       // userID → *balanceCacheEntry（读缓存，5s TTL）
-	// notifier 是通知中心入口（P2-3），可为 nil（未装配时静默跳过）。
+	// notifier 是通知中心入口，可为 nil（未装配时静默跳过）。
 	// 用接口而不是 *notify.Manager：单测可注入替身，且 billing 不必绑定
 	// notify 包的具体形状；nil 时所有通知点退化为 no-op。
 	notifier Notifier
@@ -105,7 +105,7 @@ type Store interface {
 	AtomicAddBalance(ctx context.Context, userID string, amount int, reason string) (int, error)
 	RecordBillingRecord(ctx context.Context, userID, sessionID string, inputTokens, outputTokens, cachedTokens, costCents int, turnID string) error
 	PaymentStore
-	// EntitlementStore 承载套餐目录与用户权益（P2-2 一次性套餐）。
+	// EntitlementStore 承载套餐目录与用户权益。
 	// 单独成表而不是塞进 credit_transactions：权益发放可幂等重放，余额变更不能。
 	EntitlementStore
 }
@@ -131,7 +131,7 @@ func (m *Manager) Subscribe(obs BillingObserver) {
 	m.observers = append(m.observers, obs)
 }
 
-// SetNotifier 装配通知中心（P2-3）。传 nil 即关闭通知。
+// SetNotifier 装配通知中心。传 nil 即关闭通知。
 //
 // 用 setter 而不是改 NewManager 签名：NewManager 已有多个调用点与测试，
 // 加参数会让所有既有调用点被迫改动，而这个依赖是可选的（未装配时通知退化为 no-op）。
@@ -368,7 +368,7 @@ func (m *Manager) ExpiringEntitlements(ctx context.Context, now time.Time, withi
 	return m.store.ExpiringEntitlements(ctx, now, withinDays)
 }
 
-// AdminListPackages 返回某租户全部套餐（含已下架），供租户后台管理页（P2-2c）。
+// AdminListPackages 返回某租户全部套餐（含已下架），供租户后台管理页。
 func (m *Manager) AdminListPackages(ctx context.Context, tenantID int) ([]Package, error) {
 	return m.store.AdminListPackages(ctx, tenantID)
 }

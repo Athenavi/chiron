@@ -1,6 +1,6 @@
 """计费口径对齐：usage_events 增加 credits_charged；billing_records 增加 cached_tokens。
 
-背景（P1-9）：`usage_events.cost_cents` 历史上被写入的是**用户余额扣减 credits**，
+背景：`usage_events.cost_cents` 历史上被写入的是**用户余额扣减 credits**，
 而 `billing_records.cost_cents` 是**企业成本（分）**。两者同名不同义，前端把前者
 当“费用（元）”展示，导致口径错误。
 

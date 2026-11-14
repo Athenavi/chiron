@@ -165,7 +165,7 @@ export interface NoticeItem extends ChatItemBase {
   content: string
 }
 
-/** 一条用量事件的增量。注意 `usage` 是**每次 LLM 调用**一条（C3），不是每轮一条。 */
+/** 一条用量事件的增量。注意 `usage` 是**每次 LLM 调用**一条，不是每轮一条。 */
 export interface TurnStatsDelta {
   inputTokens: number
   outputTokens: number

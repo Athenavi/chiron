@@ -294,7 +294,7 @@ class MCPClient:
 
     async def _connect_stdio(self, server: ServerDef) -> None:
         """Connect to an MCP server via stdio (subprocess)."""
-        # 安全修复（P0-S7）：仅允许 PLUGIN_COMMAND_ALLOWLIST 白名单内的命令被拉起
+        # 安全修复：仅允许 PLUGIN_COMMAND_ALLOWLIST 白名单内的命令被拉起
         from app.tools.ssrf import command_allowed
 
         if not command_allowed(server.command):

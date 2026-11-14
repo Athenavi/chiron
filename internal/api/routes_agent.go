@@ -226,7 +226,7 @@ func registerAgentRoutes(
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), limit)
 		// 把预检预留的量带进真正的回合：结束时 submit_handler 据此把估算扣回、换成真实 usage。
 		ctx = WithQuotaReserve(ctx, reserved)
-		// 批 E2：每次 run 唯一 token（锁归属校验：续期/释放均需匹配，防旧 run 误删新锁）
+		// 每次 run 唯一 token（锁归属校验：续期/释放均需匹配，防旧 run 误删新锁）
 		var rnd [12]byte
 		_, _ = rand.Read(rnd[:])
 		runToken := userID + "-" + hex.EncodeToString(rnd[:])
@@ -296,7 +296,7 @@ func registerAgentRoutes(
 			}
 		}
 
-		// 批 E2：run 锁心跳续期（60s/次，TTL=5min）。统一走 session_coord 的同一份实现
+		// run 锁心跳续期（60s/次，TTL=5min）。统一走 session_coord 的同一份实现
 		// （与 /v1/agent/followup 共用），避免两处各写一份又漂移。
 		// 持有实例崩溃后无续期，锁 ≤5min 自动过期，用户可重试（历史消息已持久化）。
 		var stopHeartbeat func()
@@ -312,7 +312,7 @@ func registerAgentRoutes(
 
 		Accepted(w, map[string]string{"status": "accepted", "session_id": body.SessionID})
 		go func() {
-			// P1-1：用户回合也持有会话运行锁，所以它收尾时同样必须接着取队列 ——
+			// 用户回合也持有会话运行锁，所以它收尾时同样必须接着取队列 ——
 			// 否则"跑着的那一轮会接手"这句话在**用户**发起的那一轮上不成立，
 			// 事件会在队列里一直等到下一条事件或进程重启。
 			//
@@ -361,7 +361,7 @@ func registerAgentRoutes(
 	mux.Handle("POST /v1/agent/cancel", cancelMW)
 
 	// 实时通道统一为 SSE（events.go：Redis Stream + Pub/Sub 跨实例、Last-Event-ID 断线重放）。
-	// 批 B-3′：下线 /ws/{sessionId} 与 WebSocketHub（前端仅 EventSource）；RPA 插件通道 /ws/rpa 保留。
+	// 下线 /ws/{sessionId} 与 WebSocketHub（前端仅 EventSource）；RPA 插件通道 /ws/rpa 保留。
 	sseHandler := SSEHandler(eventHub, sessionMgr)
 	mux.Handle("GET /events", authMW(rlMW(sseHandler)))
 	mux.Handle("GET /v1/events", authMW(rlMW(sseHandler)))

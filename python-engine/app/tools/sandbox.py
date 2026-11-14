@@ -479,7 +479,7 @@ CPU_LIMIT_SECONDS = 30
 #: 子进程单文件写入上限（RLIMIT_FSIZE）
 FILE_LIMIT_BYTES = 10 * 1024 * 1024
 
-# ── 执行输出的可信截断（批 B 片 5）──
+# ── 执行输出的可信截断──
 #
 # 对位 deepagents 的 `ExecuteOffloadResult`：**截断与退出码分开表达**。此前执行输出要么
 # 不截断（把整段塞进上下文），要么在工具层静默砍掉 —— 后者会让模型误判"输出就这么短"。
@@ -499,19 +499,31 @@ EXECUTE_HEAD_BYTES = 64 * 1024
 EXECUTE_TAIL_BYTES = 16 * 1024
 
 
-def truncate_execute_output(text: str) -> tuple[str, bool]:
+def truncate_execute_output(
+    text: str,
+    *,
+    max_bytes: int = MAX_EXECUTE_OUTPUT_BYTES,
+    head_bytes: int = EXECUTE_HEAD_BYTES,
+    tail_bytes: int = EXECUTE_TAIL_BYTES,
+) -> tuple[str, bool]:
     """按字节上限截断执行输出，保留 head+tail 并标注省略量。
+
+    Args:
+        text: 待截断文本。
+        max_bytes / head_bytes / tail_bytes: 上限与保留量。默认值面向工具执行；
+            **调用方有自己的上限时必须显式传入** —— hook 的预算（256 KiB）远小于
+            工具执行（2 MiB），复用默认值会让"同一份输出上限"在两种形态下差 8 倍。
 
     Returns:
         `(截断后的文本, 是否发生截断)`。调用方据此填 `truncated` 字段 ——
         **截断由产生截断的这一层给出**，不由上层扫文本猜测（协议约束 2）。
     """
     encoded = text.encode("utf-8", errors="replace")
-    if len(encoded) <= MAX_EXECUTE_OUTPUT_BYTES:
+    if len(encoded) <= max_bytes:
         return text, False
-    head = encoded[:EXECUTE_HEAD_BYTES].decode("utf-8", errors="replace")
-    tail = encoded[-EXECUTE_TAIL_BYTES:].decode("utf-8", errors="replace")
-    omitted = len(encoded) - EXECUTE_HEAD_BYTES - EXECUTE_TAIL_BYTES
+    head = encoded[:head_bytes].decode("utf-8", errors="replace")
+    tail = encoded[-tail_bytes:].decode("utf-8", errors="replace")
+    omitted = len(encoded) - head_bytes - tail_bytes
     return f"{head}\n... [{omitted} bytes truncated] ...\n{tail}", True
 
 
@@ -681,7 +693,7 @@ async def _run_in_sandbox_impl(command: str, timeout: int = 120) -> dict[str, An
         proc.kill()
         await proc.wait()
         return {"error": "timeout", "timeout": timeout}
-    # 批 B 片 5：执行输出按字节上限截断，并**显式标注**截断量（exit_code 不受影响 ——
+    # 执行输出按字节上限截断，并**显式标注**截断量（exit_code 不受影响 ——
     # 不能因为输出太大就丢掉"命令到底成功没有"这个最关键的信息）
     stdout_text, stdout_truncated = truncate_execute_output(
         stdout.decode("utf-8", errors="replace")

@@ -211,7 +211,7 @@ var resolveModelAccess = func(ctx context.Context, tenantID int16, userID, model
 	return defaultPolicyHandler.modelAccessReason(ctx, tenantID, userID, modelID)
 }
 
-// GuardChatModelAccess 是对话提交链路的模型准入闸门（P2-2b）。
+// GuardChatModelAccess 是对话提交链路的模型准入闸门。
 //
 // 返回 true 表示放行；false 表示**已写出 403 响应**，调用方必须中止转发。
 //

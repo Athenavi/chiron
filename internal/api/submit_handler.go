@@ -116,10 +116,10 @@ func (h *SubmitHandler) SubmitApproval(w http.ResponseWriter, r *http.Request) {
 		SessionID  string `json:"session_id"`
 		ToolCallID string `json:"tool_call_id"`
 		Approved   bool   `json:"approved"`
-		// Decision（C5）是审批三态：`approve` / `reject` / **`edit`**。
+		// Decision是审批三态：`approve` / `reject` / **`edit`**。
 		// 留空 = 由 `Approved` 推导 ⇒ 旧前端（只发 approved）行为不变。
 		Decision string `json:"decision,omitempty"`
-		// Arguments（C5）仅在 Decision=edit 时出现：**编辑后的完整参数对象**（JSON 字符串）。
+		// Arguments仅在 Decision=edit 时出现：**编辑后的完整参数对象**（JSON 字符串）。
 		// 引擎会用它重跑 tool_policy 分级（级别升高则**不执行**）并落审计，
 		// 见 python-engine/app/agent/runtime.py 的 `_await_approval`。
 		Arguments string `json:"arguments,omitempty"`
@@ -612,7 +612,7 @@ func (h *SubmitHandler) submitOnce(ctx context.Context, userID, sessionID, conte
 	}
 	// P1-c：用**会话运行时状态**解析最终生效的模式/模型/provider（唯一解析链，spec §3）。
 	// 前端 llm_config 视为"本次请求的显式意图"，优先级高于会话 runtime 与默认值；
-	// 若前端未传（P1-e 后的目标形态），则由 runtime / 用户默认 / 全局默认依次生效。
+	// 若前端未传，则由 runtime / 用户默认 / 全局默认依次生效。
 	explicit := map[string]string{}
 	if llmConfig != nil {
 		if v, ok := llmConfig["mode"].(string); ok && v != "" {
@@ -634,7 +634,7 @@ func (h *SubmitHandler) submitOnce(ctx context.Context, userID, sessionID, conte
 			tenantID = parseTenantID(claims.UserID)
 		}
 	}
-	// roadmap §6 问题 4：事件驱动回合默认降级到 `ask`（见 restrictEventDrivenToolsMode）。
+	// 问题 4：事件驱动回合默认降级到 `ask`（见 restrictEventDrivenToolsMode）。
 	explicit = restrictEventDrivenToolsMode(ctx, userID, workbenchCtx, explicit)
 	// tenant_id 仍要透传：引擎侧按它隔离记忆/知识库/审计。
 	pythonReq["tenant_id"] = tenantID
@@ -943,7 +943,7 @@ func (h *SubmitHandler) submitOnce(ctx context.Context, userID, sessionID, conte
 	TrueUpTenantQuota(storeCtx, userID, tenantID, int64(usage.input+usage.output),
 		QuotaReserveFromContext(ctx))
 
-	// 接管回合的预算记账（P1-2 第 8 步 / 验收第 5 条）：把这一轮的**真实**用量交回驱动，
+	// 接管回合的预算记账：把这一轮的**真实**用量交回驱动，
 	// 由它在整个回合（含目标续跑的各轮）结束后累加 `token_spent` 并判定硬闸门。
 	//
 	// 口径与上一句 `TrueUpTenantQuota` 完全一致（input + output，cached 不进池不计预算）：

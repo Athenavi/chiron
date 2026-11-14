@@ -6,7 +6,7 @@
 
 1. 默认（`local` / 没配 URL）⇒ **恒等**，一行行为都不变；
 2. `service` + URL + 租户白名单 ⇒ 包装成 `RemoteExecBackend`，且**只有白名单租户**走服务；
-3. `service` + URL + **空白名单** ⇒ 包装了且**全部租户走服务**（P0-1 默认启用）；
+3. `service` + URL + **空白名单** ⇒ 包装了且**全部租户走服务**；
 4. `service` + URL + 不支持执行的默认后端 ⇒ 记 warning 并**保持恒等**（配置错误不静默）。
 """
 
@@ -61,7 +61,7 @@ def test_service_routes_only_whitelisted_tenants(cfg):
 
 
 def test_service_with_empty_tenant_whitelist_routes_everyone(cfg):
-    """空白名单 = **全部租户走服务**（P0-1：沙箱隔离是默认行为）。
+    """空白名单 = **全部租户走服务**。
 
     旧语义（"空白名单谁都不走"）虽是刻意的安全默认，却让隔离在**默认配置下不生效**；
     改为默认全走后，要豁免个别租户用白名单，要整体退回进程内用 `SANDBOX_BACKEND=local`。

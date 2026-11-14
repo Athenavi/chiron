@@ -1,4 +1,4 @@
-"""B1（方案 04 §3）：按**模型家族**的 harness 塑形。
+"""B1：按**模型家族**的 harness 塑形。
 
 最重要的性质是**未注册 ⇒ 逐字不变**：引入这个机制不该悄悄改变任何现有模型的输出。所以本文件的
 一半断言是在测"没注册时什么都不发生"。
@@ -156,5 +156,5 @@ def test_end_to_end_suffix_lands_in_system_message():
     messages = _apply_system_prefix([{"role": "user", "content": "hi"}], task)
 
     assert messages[0]["content"] == f"{PROMPT}\n\nDS-RULES"
-    # 记忆仍是**独立**的 system 消息（C2），没被 suffix 吃进去
+    # 记忆仍是**独立**的 system 消息，没被 suffix 吃进去
     assert messages[1]["content"] == "memory block"

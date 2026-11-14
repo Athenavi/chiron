@@ -140,10 +140,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # ── 1.5 部署前置校验：多副本安全前置（沙箱根 + 媒体后端）──
     _verify_deployment_preconditions()
 
-    # ── 1.6 文件后端选择（批 B 片 4）──
+    # ── 1.6 文件后端选择──
     await _start_file_backend()
 
-    # ── 1.7 部署级扩展（批 H）──
+    # ── 1.7 部署级扩展──
     _start_deployment_extensions()
 
     # ── 2. Redis 连接池 ──
@@ -178,7 +178,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # ── 6.5. 启动进程指标收集器 ──
     _metrics_task = _start_process_metrics()
-    # P1-④ 批 B：订阅 harness 配置变更（Go 侧写入后广播），收到即清进程内缓存 ——
+    # P1-④ 订阅 harness 配置变更（Go 侧写入后广播），收到即清进程内缓存 ——
     # 把"最多滞后一个 TTL"变成即时生效。Redis 不可用时它自己退避重试，不影响启动。
     _harness_task = _start_harness_watch()
 
@@ -192,7 +192,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     _price_sync_task = _start_price_sync()
     logger.info("Process metrics collector started (interval=10s)")
 
-    # ── 8. 实例注册（批 E1：引擎动态发现）──
+    # ── 8. 实例注册（引擎动态发现）──
     # 网关 StartEngineDiscovery 每 15s 消费本注册表并动态更新引擎地址（替代静态清单）。
     # 需 ENGINE_ADVERTISE_URL（引擎网络可达地址）;Redis 不可用/未配置时跳过,网关回退静态地址。
     # A4：run 归属路由（engine:run:*，批 4）依赖本注册表才能把 instance_id 解析成地址——
@@ -207,15 +207,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # （读不到键 = 判定所有人都死了）。没 Redis 时 start() 返回 False，清扫随之禁用。
     _liveness = await _start_instance_liveness()
 
-    # 批 G：用户自定义 hook 误开必须可见（方案 03 §3.2）
+    # 用户自定义 hook 误开必须可见
     # 批 G+（钩子协议批次 1）：部署级声明文件（`hooks_config_path` 为空 ⇒ 零行为变化）。
     # 只接受部署级声明；解析失败只记 error + 审计并**不注册任何 hook**，绝不拖垮启动。
     _apply_hook_config()
 
     # ── C1 批 3：僵尸 run 巡检（启动一次 + 周期 60s + 每实例抖动）──
     # 它只修正"旧主已死"的 run 状态（`running` → `checkpointed`；快照超冷窗口 → `abandoned`），
-    # **不触发续跑** —— 自动续跑需要重建 AgentTask，而配置只存在于提交请求里
-    # （见评审 03 §17.2）。巡检起不来不该拖垮引擎启动，故 try 包住。
+    # **不触发续跑** —— 自动续跑需要重建 AgentTask，而配置只存在于提交请求里。
+    # 巡检起不来不该拖垮引擎启动，故 try 包住。
     # 续跑的执行体是模块级的 `_auto_resume_runner`（无人值守回合，见其注释）。
     _reconciler_task = await _start_run_reconciler()
 
@@ -298,10 +298,10 @@ async def _start_file_backend() -> None:
     **通过 `set_default_backend` 造成进程级副作用**，不返回句柄：后续的部署扩展段与所有工具
     都从 `app.backends.context.get_backend()` 取，所以这里是纯装配。
     """
-    # ── 1.6 文件后端选择（批 B 片 4）──
+    # ── 1.6 文件后端选择──
     # 默认 `local`：agent 文件工具直接读写 per-user workspace（行为与历史完全一致）。
     # `filestore`：改为经网关 `/v1/internal/storage/*` 读写部署级 FileStore（共享卷 / S3），
-    # 多副本下不再"写 A 副本、读 B 副本"失忆。**显式开关**，不猜部署形态（评审 02 §1）。
+    # 多副本下不再"写 A 副本、读 B 副本"失忆。**显式开关**，不猜部署形态。
     from app.backends.context import set_default_backend
     from app.backends.filestore import build_filestore_backend_from_settings
 
@@ -470,7 +470,7 @@ async def _start_memory_service() -> None:
         set_memory_service(mem_svc)
         bind_prompt_memory(mem_svc)
 
-        # N1（评审 03 §1.2）：把"空闲会话结束"接到记忆的会话级收尾上。
+        # N1：把"空闲会话结束"接到记忆的会话级收尾上。
         #
         # 此前 `start_periodic_cleanup` **从未被调用** —— 空闲会话既不清理也不通知，于是
         # `on_session_end`（会话级 L3 rollup 入队 + 丢 L1）只在"异常/中断退出"那条路径上
@@ -754,7 +754,7 @@ def _start_deployment_extensions() -> None:
     **默认关**：`deploy_extensions_enabled=false` 时 `load_*_from_settings` 直接返回
     `None`，连后端都不触碰 —— 零行为变化。开启时从**部署目录**读 `extensions.json`：
     工具登记进注册表，后端虚拟路由装配进默认后端（**重启生效**，不做热切换）。
-    任何失败都 fail-soft：记日志、绝不拖垮引擎启动（方案 03 §4 验收③）。
+    任何失败都 fail-soft：记日志、绝不拖垮引擎启动。
 
     只经 `set_default_backend` 产生进程级副作用，**不返回句柄**：扩展登记的工具与路由都落在
     全局注册表 / 默认后端里，后续的关闭段无需再持有 `deploy_extensions`。
@@ -925,7 +925,7 @@ def _start_process_metrics() -> Any:
 def _start_harness_watch() -> Any:
     """订阅 harness 配置变更（从 `lifespan` 抽出）；**返回句柄**供关闭段取消。
 
-    P1-④ 批 B：Go 侧写入后广播，收到即清进程内缓存 —— 把"最多滞后一个 TTL"
+    P1-④ Go 侧写入后广播，收到即清进程内缓存 —— 把"最多滞后一个 TTL"
     变成即时生效。Redis 不可用时它自己退避重试，不影响启动。
     """
     from app.agent.harness_store import listen_for_changes as _listen_harness_changes
@@ -1065,7 +1065,7 @@ def _start_retention_cleaner() -> Any:
 async def _start_engine_registry() -> Any:
     """启动引擎实例注册（从 `lifespan` 抽出）；**返回句柄**供关闭段注销。
 
-    批 E1：网关 `StartEngineDiscovery` 每 15s 消费本注册表并动态更新引擎地址
+    网关 `StartEngineDiscovery` 每 15s 消费本注册表并动态更新引擎地址
     （替代静态清单）。A4：run 归属路由（`engine:run:*`）依赖本注册表才能把
     `instance_id` 解析成地址 —— 未配 `ENGINE_ADVERTISE_URL` 时归属映射会被写入
     但网关查不到地址，审批/取消仍按一致性哈希漂移。这不是故障，但必须让部署者
@@ -1107,7 +1107,7 @@ async def _start_instance_liveness() -> Any:
 def _apply_hook_config() -> None:
     """应用部署级 hook 配置（从 `lifespan` 抽出）。
 
-    批 G：用户自定义 hook 误开必须可见（方案 03 §3.2）。
+    用户自定义 hook 误开必须可见。
     批 G+：部署级声明文件（`hooks_config_path` 为空 ⇒ 零行为变化）；只接受
     部署级声明，解析失败只记 error + 审计并**不注册任何 hook**，绝不拖垮启动。
     """
@@ -1122,7 +1122,7 @@ async def _start_run_reconciler() -> Any:
 
     C1 批 3：启动一次 + 周期 60s + 每实例抖动。它只修正"旧主已死"的 run 状态
     （`running` → `checkpointed`；快照超冷窗口 → `abandoned`），**不触发续跑** ——
-    自动续跑需要重建 AgentTask，而配置只存在于提交请求里（见评审 03 §17.2）。
+    自动续跑需要重建 AgentTask，而配置只存在于提交请求里。
     巡检起不来不该拖垮引擎启动，故 try 包住。续跑的执行体是模块级的
     `_auto_resume_runner`（无人值守回合，见其注释）。
     """
@@ -1258,7 +1258,7 @@ async def _shutdown_lifespan(
         except Exception as e:  # noqa: BLE001
             logger.warning("model price sync shutdown failed: %s", e)
 
-    # P1-④ 批 B：停 harness 配置订阅（PubSub 循环，取消即断开）
+    # P1-④ 停 harness 配置订阅（PubSub 循环，取消即断开）
     if harness_task is not None:
         harness_task.cancel()
         try:
@@ -2469,7 +2469,7 @@ async def _run_queue_worker(redis: aioredis.Redis, gateway: Any = None) -> None:
         if _queue_worker_instance is worker:
             _queue_worker_instance = None
             await worker.stop()
-        # 停掉看门狗与取消订阅，并注销本实例持有的作业归属（P4-3）。
+        # 停掉看门狗与取消订阅，并注销本实例持有的作业归属。
         # 注意这里必须**就地导入**：该函数（worker 常驻循环）在模块加载后才被调用，
         # 而此前这里引用的是一个从未导入的名字 —— 一旦走到这条 finally 就会 NameError，
         # 也就是说"关机时的收尾"其实一次都没成功执行过。

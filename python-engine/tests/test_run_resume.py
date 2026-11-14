@@ -1,4 +1,4 @@
-"""C1 批 3+：run 恢复路径与 reconciler（方案 01 §3.1）。
+"""C1 批 3+：run 恢复路径与 reconciler。
 
 覆盖三件事：
 * **入口恢复**：有可用快照 ⇒ 用快照做历史起点（已完成回合/工具不重放）；窗口超限/快照损坏
@@ -529,7 +529,7 @@ def test_metrics_are_registered():
 
 
 async def test_sweep_auto_resumes_within_hot_window(monkeypatch):
-    """热窗口 + runner + CAS 成功 ⇒ **真的续跑**（方案 §3.1 的"自动接管"）。"""
+    """热窗口 + runner + CAS 成功 ⇒ **真的续跑**（即"自动接管"）。"""
     marks, claims = _patch_reconciler(monkeypatch, rows=[_row("running")], lock_held=False)
     ran: list[Any] = []
 

@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import uuid
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -193,7 +194,11 @@ async def test_duplicate_plan_writes_in_one_batch_execute_once():
 @pytest.mark.asyncio
 async def test_plan_state_is_not_in_message_history():
     """计划**不堆积进消息历史**：模型通过 tool_result 回显看到它，而不是每轮重喂一份。"""
-    set_tool_context(session_id="s-todo-history")
+    # session id 必须唯一：看板按 `tenant:session` 落在 **Redis**，固定 id 会让本轮
+    # 读到上次运行残留的清单，于是"第一轮不该有计划"这个断言测的就不是本轮行为。
+    # 下面的 autouse fixture 只清 contextvars，清不到 Redis。
+    session = f"s-todo-history-{uuid.uuid4().hex[:8]}"
+    set_tool_context(session_id=session)
     runtime = _runtime_with_calls(
         [
             ToolCall(
@@ -212,7 +217,7 @@ async def test_plan_state_is_not_in_message_history():
             yield chunk
 
     runtime._gateway.chat_stream = capturing_stream
-    _ = [event async for event in runtime.run(_task("s-todo-history"))]
+    _ = [event async for event in runtime.run(_task(session))]
 
     assert captured, "应有第二次模型调用"
     system_texts = [

@@ -1,6 +1,6 @@
 """Super-agent 看门狗（app/agent/watchdog.py + app/queue/watchdog_job.py）。
 
-回归保护三条验收（roadmap P1-3）：
+回归保护三条验收：
 
 1. 对"兜圈子"回放样本给出**与 loop_guard 一致或更早**的信号；
 2. 关掉时**零影响** —— 连采集都不发生；

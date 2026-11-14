@@ -6,7 +6,7 @@
    `command` 形态打印的正文、`webhook` 响应的正文都**不会**被当成上下文（它们的正文只用于
    人读的 `reason`）。可注入的只有输出 JSON 里的 `additional_context` 字段。
 2. **独立开关默认关**（`settings.hooks_allow_context_injection`）⇒ 关闭时零行为变化。
-3. **作为独立 system 消息**注入，复用记忆注入（C2/A2）已经确立的形态：不拼进
+3. **作为独立 system 消息**注入，复用记忆注入已经确立的形态：不拼进
    `system_prompt`（那会让逐字稳定的前缀缓存整段失效），且带**信任声明**。
 4. **脱敏 + 长度上限**：hook 的返回来自第三方代码（`python`/`command` 形态）或外部服务
    （`webhook` 形态），可能夹带密钥；长度也不受控。

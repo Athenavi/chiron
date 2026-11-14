@@ -1,8 +1,8 @@
-"""批 H：扩展注册 API（方案 03 §4）—— 拆成**部署级**与**租户级**两层。
+"""扩展注册 API—— 拆成**部署级**与**租户级**两层。
 
 deepagents 的 ``register_middleware / register_tool / register_backend_route`` 是
 "进程内任意注册"，前提是**单租户进程**。Chiron 是多租户 SaaS，照搬等于"任意 Python
-注入引擎进程"，因此必须拆开（方案 03 §4 的表格）：
+注入引擎进程"，因此必须拆开：
 
 | 层 | 谁能用 | 能注册什么 | 生效方式 | 安全约束 |
 |---|---|---|---|---|
@@ -17,7 +17,7 @@ MCP server（外部进程）或插件（``plugin_runner.py`` 子进程沙箱）�
 部署级的"校验来源"落在 ``_resolve_within_root``：清单引用的任何 Python 模块都必须
 **落在部署目录内**，越界（``../`` 逃逸 / 绝对路径）一律拒绝 —— 否则这份清单本身
 就变成了"任意文件读取/执行"的原语。加载失败一律 **fail-soft**（记日志 + 收集
-``errors``），绝不拖垮引擎启动（方案 03 §4 验收③）。
+``errors``），绝不拖垮引擎启动。
 """
 
 from __future__ import annotations
@@ -92,7 +92,7 @@ def _normalize_mount(mount: str) -> str:
 
 
 class DeploymentExtensions:
-    """部署级扩展的登记表（进程内、**重启生效** —— 按方案 03 §4 不做热切换）。
+    """部署级扩展的登记表（进程内、**重启生效** —— 按 不做热切换）。
 
     工具直接登记进 ``ToolRegistry``（见 ``load_deployment_extensions``）；本类只负责
     **后端虚拟路由** —— 因为它最终要装配成批 B 的 ``CompositeBackend``。
@@ -240,7 +240,7 @@ def load_deployment_extensions(
     """从部署目录加载部署级扩展（工具 + 后端虚拟路由），**fail-soft**。
 
     契约：任何失败都变成 ``report.errors`` 里的一条，**不抛异常** —— 引擎启动不能被
-    一份写坏的扩展清单拖垮（方案 03 §4 验收③）。调用方按 ``report.ok`` 决定是否告警。
+    一份写坏的扩展清单拖垮。调用方按 ``report.ok`` 决定是否告警。
 
     只有部署者能走到这里：``root`` 是部署目录（只读、不进用户上传通道），清单里引用的
     模块必须落在该目录内。
@@ -371,7 +371,7 @@ class TenantExtensions:
     """
 
     def register_tool(self, name: str, handler: Any) -> None:
-        """**拒绝**：租户不能在引擎进程内注册可执行工具（方案 03 §4 硬约束）。
+        """**拒绝**：租户不能在引擎进程内注册可执行工具（安全硬约束）。
 
         租户要自定义逻辑只有两条合法路径 —— MCP server 或插件子进程沙箱。这里永不
         成功返回；保留 ``handler`` 参数正是为了让"被拒绝"这件事在调用点显式可见。

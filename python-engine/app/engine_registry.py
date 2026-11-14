@@ -1,4 +1,4 @@
-"""EngineRegistry — 引擎实例 Redis 自注册（批 E1）。
+"""EngineRegistry — 引擎实例 Redis 自注册。
 
 多实例部署下，网关通过 Redis 注册表动态发现引擎副本，替代静态 PYTHON_ENGINE_ADDRESS
 的人工同步。引擎启动后周期性写 {REDIS_KEY_PREFIX}engine:instance:{instance_id} =

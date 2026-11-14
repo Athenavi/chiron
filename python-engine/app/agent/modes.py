@@ -63,7 +63,7 @@ CORE_TOOL_NAMES = frozenset(
         # 任务清单：长任务的"计划"必须能被模型自己读写。此前它不在这个白名单里，
         # normal 模式**只经 tool_search 才可能拿到** —— 模型压根不知道有这个工具，
         # 于是"读用户那条 todo_write 问题反馈"就变成了"工具不存在"。而增量更新、
-        # 未完成阻断（P1-1/P1-2）全都以它为前提。
+        # 未完成阻断全都以它为前提。
         "todo_write",  # 维护任务清单（分步计划 / 进度）
         "media_create",  # 产出可下载的资产（媒体库；含二进制——见 app/tools/media.py）
         "subagent",  # 子 agent 委派（多 agent 协作核心）

@@ -1,17 +1,17 @@
-"""模型上下文窗口表与 token 计量（C4 / C2 段 a）。
+"""模型上下文窗口表与 token 计量。
 
 **阈值不该硬编码**：`runtime.py` 的 `MAX_CONTEXT_TOKENS = 8192` 是历史遗留（注释自陈
 "约 GPT-4 的 1/10"），而 `llm_models.context_window` 列**早已存在**（baseline 迁移）。
 本模块把它读进进程内缓存，作为压缩阈值的来源。
 
-**为什么不引 tiktoken**（评审 01 §1.7 的三条理由）：
+**为什么不引 tiktoken**：
 
 1. 它只覆盖 OpenAI 系词表，而 Chiron 声明 20+ provider —— anthropic/glm/qwen 等会系统性偏差；
 2. 新增重依赖要付维护成本（`requirements.txt` 有过"声明缺口导致 CI 红"的教训）；
 3. provider 已在响应里回传真实 `usage`，**用它校准比换词表更准**。
 
 缓存策略：进程内 TTL（默认 5 分钟）。窗口配置属"低频变更、高频读取"，每次请求查库不值当；
-TTL 内变更最多滞后 5 分钟 —— 这是刻意的取舍（与评审 01 §1.7 的"系数不落 PG"同一取向）。
+TTL 内变更最多滞后 5 分钟 —— 这是刻意的取舍（"系数不落 PG"同一取向）。
 """
 
 from __future__ import annotations
@@ -154,23 +154,26 @@ async def _query_window(model: str) -> int:
     return DEFAULT_CONTEXT_WINDOW
 
 
-async def _query_max_output(model: str) -> int:
-    """查 `llm_models.max_output_tokens`。
+async def _query_max_output(model: str) -> int | None:
+    """查 `llm_models.max_output_tokens`；**查不到一律返回 `None`**（= 未知）。
 
-    NULL / <=0 / 低于 `MIN_MAX_OUTPUT_TOKENS` 一律按"未知"处理并回落默认值：
-    管理端误填 1 会让模型每一轮都说不出完整句子，静默回落比照单执行更安全
-    （它是调参输入，不是安全边界）。
+    NULL / <=0 / 低于 `MIN_MAX_OUTPUT_TOKENS` 一律按"未知"处理：管理端误填 1 会让
+    模型每一轮都说不出完整句子，视为未知比照单执行更安全（它是调参输入，不是安全边界）。
 
-    任何异常同样回落 —— 与窗口查询同一取向：查库失败不该阻断对话。
+    任何异常同样返回 `None` —— 与窗口查询同一取向：查库失败不该阻断对话。
     `max_output_tokens` 列在旧库上可能不存在（迁移未跑），此时 asyncpg 抛
     UndefinedColumnError，正好走这条兜底路径，不需要额外探测 schema。
+
+    **本函数不决定回落值**：调用方各有各的 fallback（runtime 传
+    `settings.default_max_tokens`），在这里替它选一个会污染缓存 —— 见
+    `max_output_tokens` 的说明。
     """
     try:
         from app.db import get_pool
 
         pool = get_pool()
         if pool is None:
-            return DEFAULT_MAX_OUTPUT_TOKENS
+            return None
         row = await pool.fetchrow(
             """
             SELECT max_output_tokens
@@ -184,9 +187,9 @@ async def _query_max_output(model: str) -> int:
         value = row["max_output_tokens"] if row is not None else None
         if value and int(value) >= MIN_MAX_OUTPUT_TOKENS:
             return int(value)
-    except Exception as exc:  # noqa: BLE001 — 查不到就用回落值
+    except Exception as exc:  # noqa: BLE001 — 查不到就按"未知"处理
         logger.debug("max_output_tokens lookup failed (%s): %s", model, exc)
-    return DEFAULT_MAX_OUTPUT_TOKENS
+    return None
 
 
 #: 内联媒体被折算成的占位符（只保留"这里曾有媒体"的信息，丢掉载荷字节）。
@@ -225,7 +228,7 @@ def strip_inline_media(value: Any) -> Any:
 
 
 class TokenEstimator:
-    """字符近似 + provider usage **校准**（C4）。
+    """字符近似 + provider usage **校准**。
 
     校准系数 = 真实 `input_tokens` ÷ （字符数 / 4），按 model 缓存并做指数平滑。
     这样不引词表也能逼近各家的真实分词密度 —— 而且用的是**真实回传值**，不是猜。

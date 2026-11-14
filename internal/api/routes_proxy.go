@@ -26,10 +26,9 @@ func registerProxyRoutes(
 	type proxyOpt struct {
 		methods []string // allowed HTTP methods; empty = GET+POST+PUT+DELETE
 		logTag  string
-		// mutateBody 在把请求体转发给引擎前改写它（P1-c：统一链路注入会话运行时解析结果，
-		// 见 docs/session-runtime-spec.md §5）。返回 false 表示已自行写出响应、代理应中止。
+		// mutateBody 在把请求体转发给引擎前改写它。返回 false 表示已自行写出响应、代理应中止。
 		mutateBody func(r *http.Request, body map[string]interface{}) bool
-		// guardBody 在 mutateBody **之后**执行准入校验（P2-2b：模型可用范围）。
+		// guardBody 在 mutateBody **之后**执行准入校验。
 		//
 		// 顺序不能反：mutateBody 会把会话运行时解析出的最终 model 写回 body，
 		// 若在此之前校验，看到的是前端随手传的字段而非真正生效的模型。
@@ -178,7 +177,7 @@ func registerProxyRoutes(
 		logTag:     "chat",
 		mutateBody: InjectSessionRuntime,
 		// 模型准入排在 mutateBody 之后：后者才把会话运行时解析出的最终 model
-		// 写回 body，先校验等于校验了错误的字段（P2-2b）。
+		// 写回 body，先校验等于校验了错误的字段。
 		guardBody: GuardChatModelAccess,
 	})
 	mux.Handle("POST /v1/chat/submit", authMW(rlMW(chatP(pathFn("/v1/chat/submit")))))

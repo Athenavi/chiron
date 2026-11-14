@@ -138,7 +138,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         #      **body-身份端点**）：token 合法即放行 —— 身份由端点自己从 body /
         #      X-User-ID 取（见 main.py 的 agent_submit）。这类端点**从不带 query**。
         #   ② 带完整 query 身份（ForwardRequest 形态，如 /v1/memory/*）：token 必须合法
-        #      —— 否则任何人都能自报 user_id/tenant_id（P0-3）。
+        #      —— 否则任何人都能自报 user_id/tenant_id。
         #   ③ 带了**半个** query 身份：拒绝。缺租户就等于"没有归属也能进业务逻辑"，
         #      不能靠端点碰巧做了校验来兜。
         #

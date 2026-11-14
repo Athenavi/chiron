@@ -328,7 +328,15 @@ async def _upsert(offers: list[PriceOffer]) -> int:
         return 0
     from app.db import get_pool  # 与其它 PG 访问同一条连接池入口
 
-    pool = await get_pool()
+    # `get_pool()` 是**同步**函数：池未初始化时它**抛** RuntimeError 而非返回 None。
+    # 不接住就让整个 `sync_once()` 崩掉，与上面 docstring 承诺的"降级并放弃"相反 ——
+    # 价格同步是采集任务，库不可用不该变成一个未处理异常。
+    try:
+        pool = get_pool()
+    except RuntimeError as exc:
+        logger.warning("model price sync skipped: database unavailable (%s)", exc)
+        MODEL_PRICE_SYNC.labels(outcome="db_unavailable", source="-").inc()
+        return 0
     if pool is None:
         MODEL_PRICE_SYNC.labels(outcome="db_unavailable", source="-").inc()
         return 0

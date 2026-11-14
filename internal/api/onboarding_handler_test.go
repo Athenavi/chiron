@@ -7,7 +7,7 @@ import (
 	"github.com/athenavi/chiron/internal/billing"
 )
 
-// ── 引导步骤白名单与状态折叠（P0-3，纯逻辑，不需要 DB）──────────────
+// ── 引导步骤白名单与状态折叠──────────────
 //
 // 这几个函数是引导接口的全部判断逻辑；handler 本身只做"读库 → 调它们 → 写回"。
 // 本仓没有浏览器 e2e，所以"该不该弹、哪一步算完成"必须在这里被钉住。
@@ -80,7 +80,7 @@ func TestBuildPayload_FillsEveryStepInOrder(t *testing.T) {
 func TestBuildPayload_EligibleOnlyWhenUserHasRows(t *testing.T) {
 	h := &OnboardingHandler{}
 
-	// 没有行 = 存量用户：不弹引导（roadmap：不打断已有用户）
+	// 没有行 = 存量用户：不弹引导
 	if got := h.buildPayload("u1", map[string]OnboardingStepState{}); got["eligible"] != false {
 		t.Fatalf("没有行的用户 eligible 应为 false，得到 %v", got["eligible"])
 	}

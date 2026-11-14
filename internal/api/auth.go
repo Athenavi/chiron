@@ -113,7 +113,7 @@ type AuthHandler struct {
 	// emailBloom 可选：注入后注册流程先用布隆过滤器快速否定"该邮箱未注册"，
 	// 从而跳过昂贵的 DB 判重。nil 表示未启用（始终回落 DB 查证）。
 	emailBloom *userEmailBloom
-	// notifier 可选：注入后凭邀请码注册成功会给新成员本人发一条站内信（P2-3）。
+	// notifier 可选：注入后凭邀请码注册成功会给新成员本人发一条站内信。
 	notifier notificationWriter
 	// sessionMgr 可选：注入后注销冻结时能打断该用户正在跑的回合。
 	// nil 时只冻结资产、不打断（会话会在下次交互时自然失败）。
@@ -150,7 +150,7 @@ func (h *AuthHandler) SetEmailBloomHandler(b *userEmailBloom) {
 	h.emailBloom = b
 }
 
-// SetNotifier 装配通知中心（P2-3）。传 nil 即关闭通知。
+// SetNotifier 装配通知中心。传 nil 即关闭通知。
 func (h *AuthHandler) SetNotifier(n notificationWriter) { h.notifier = n }
 
 type LoginRequest struct {
@@ -320,7 +320,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// multi-tenant isolation
-	// P1-5: tenant_id 为空直接拒绝登录
+	// tenant_id 为空直接拒绝登录
 	if tenantID == 0 {
 		slog.Warn("login rejected: user has null tenant_id", "user_id", user.ID)
 		Unauthorized(w, "user has no tenant binding; contact admin")
@@ -550,7 +550,7 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 
 	// 租户成员关系：与 users 的 INSERT 在同一事务内，避免出现「用户已存在但
 	// 没有 tenant_members 记录」的窗口 —— 读取路径一旦切到 tenant_members，
-	// 这类用户会对团队能力凭空消失（roadmap §12.4 灰度第 2 步）。
+	// 这类用户会对团队能力凭空消失。
 	//
 	// 失败即整体回滚而不是只告警：账已建好却没有成员记录，是后续所有团队
 	// 功能的静默失效源，比注册失败更难排查。
@@ -582,14 +582,14 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 新用户引导：为这个账号建好三步的 pending 行（P0-3）。
+	// 新用户引导：为这个账号建好三步的 pending 行。
 	//
 	// 放在 commit **之后**：引导进度写不进去不能让一个已经合法的账号注册失败。
 	// 存量用户（没有这一步之前注册的）因此不会在该表里留下行 ⇒ 前端判定
-	// eligible=false，不弹引导，符合 roadmap「不打断已有用户」。
+	// eligible=false，不弹引导，符合「不打断已有用户」。
 	StartOnboarding(ctx, userID)
 
-	// 团队加入通知（P2-3 的 member_invited）：必须放在 commit 之后 ——
+	// 团队加入通知：必须放在 commit 之后 ——
 	// 事务回滚时用户并不存在，通知会指向一个不存在的账号。
 	//
 	// 语义说明：`tenant_invites` 只有 code/tenant_id/created_by/... 而**没有

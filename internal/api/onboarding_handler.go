@@ -11,7 +11,7 @@ import (
 	"github.com/athenavi/chiron/internal/db"
 )
 
-// 新用户引导（P0-3）的三步。
+// 新用户引导的三步。
 //
 // 顺序即用户实际走过的顺序，前端按此顺序渲染：
 //  1. 领试用额度 —— 改为「展示你已有的试用额度」：注册即自带额度（`users.credits
@@ -235,7 +235,7 @@ func (h *OnboardingHandler) buildPayload(userID string, states map[string]Onboar
 	}
 
 	return map[string]interface{}{
-		// 没有行 = 不是新注册流程里的用户 ⇒ 前端不弹引导（roadmap：不打断已有用户）
+		// 没有行 = 不是新注册流程里的用户 ⇒ 前端不弹引导
 		"eligible": len(states) > 0,
 		"finished": finished,
 		"steps":    steps,

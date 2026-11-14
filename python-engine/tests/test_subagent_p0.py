@@ -264,7 +264,7 @@ def test_wrap_result_marks_untrusted_and_indents():
 def test_step_kind_mapping_is_bounded():
     assert _step_kind("text") == "message"
     assert _step_kind("tool_call") == "tool_call"
-    # approval 有**独立** kind（P3-后续）：历史回放据此还原成 subagent.approval，
+    # approval 有**独立** kind：历史回放据此还原成 subagent.approval，
     # 前端才能渲染可点击的审批卡片 —— 落成 notice 就只剩一行文字，看得到却批不了。
     assert _step_kind("approval") == "approval"
     # ask 同理（P4 后续）：回放要能还原成**可回答**的提问卡片（前端复用 AskCard）

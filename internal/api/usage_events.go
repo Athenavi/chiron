@@ -9,7 +9,7 @@ import (
 
 // UsageEvent 是一次 LLM 调用的用量明细。
 //
-// 与 billing_records 的区别（P1-9 统一后的口径）：
+// 与 billing_records 的区别：
 //   - usage_events：**观测 + 用户扣费**。一回合可能多行（主模型 / 子 Agent / 摘要），
 //     `credits_charged` 是这一轮实际扣减的用户 credits（免费额度内为 nil）；
 //     `cost_cents` 只承载**引擎侧真实成本**（可空），不再复用为 credits。

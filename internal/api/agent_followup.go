@@ -110,7 +110,7 @@ func AgentFollowupHandler(
 			}
 		}
 
-		// ② 入队（P1-1 接线）。语义变化：从"收到就立刻开跑"换成"先落事实、再决定跑不跑"。
+		// ② 入队。语义变化：从"收到就立刻开跑"换成"先落事实、再决定跑不跑"。
 		// 并发护栏没变（还是下面那把会话运行锁），变的是**多个事件同时到达时的行为** ——
 		// 此前第二个必然撞 409 让引擎重投，现在它进队等着，用户看到的是"一件件按顺序来"。
 		//
@@ -159,7 +159,7 @@ func AgentFollowupHandler(
 
 		// ③ 会话运行锁：正在跑别的 turn 就把事件**留在队里**，而不是 409 让引擎重投 ——
 		// 同一会话绝不能并发两个 runtime（会争 _ACTIVE_RUNTIMES、approval future 与持久终端）。
-		// 排队是串行裁决的自然结果：跑着的那一轮收尾时会接着取这一条（roadmap P1-1.1 第 4 条）。
+		// 排队是串行裁决的自然结果：跑着的那一轮收尾时会接着取这一条。
 		var rnd [12]byte
 		_, _ = rand.Read(rnd[:])
 		runToken := "followup-" + hex.EncodeToString(rnd[:])
@@ -284,7 +284,7 @@ const JobFollowupKey = "job_followup"
 // jobFollowupSwitch 是 users.settings 里控制「后台任务完成自动开新回合」的键。
 //
 // **默认关闭**：这条通道会让系统在用户没动手的时候自己烧 token，属于"主动"能力，
-// 必须先由用户显式打开（roadmap P0-1 与 §6 问题 2 的结论）。
+// 必须先由用户显式打开。
 const jobFollowupSwitch = "followup_on_job_finished"
 
 // jobFollowupEnabled 判断该用户是否开启了后台任务回投。读不到一律按关闭处理。

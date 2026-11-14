@@ -23,7 +23,7 @@ const sseWriteTimeout = 30 * time.Second
 // handleSSE manages a Server-Sent Events connection for real-time streaming.
 // It subscribes to the event hub and writes events to the response writer.
 //
-// 两种订阅身份（M21 起），**都不做全站放行**（P0-S5 的边界就在这里落地）：
+// 两种订阅身份（M21 起），**都不做全站放行**：
 //   - 会话通道（sessionID 非空）：只转发该会话的事件；无 session 的系统事件照收（既有行为）。
 //   - 用户通道（sessionID 为空、userID 非空）：只转发 `Event.UserID == userID` 的事件 ——
 //     跨会话的待办提醒要送到"这个人"，而不是某一个会话。
@@ -129,7 +129,7 @@ func handleSSE(w http.ResponseWriter, r *http.Request, hub *broadcast.Hub, subID
 				return
 			}
 			// 过滤（M21 起两种订阅身份）：会话通道按会话，用户通道按人；
-			// 两者都不放行全站事件（P0-S5 的边界就在这一处落地）。
+			// 两者都不放行全站事件。
 			if !sseEventMatches(event, sessionID, userID) {
 				continue
 			}
@@ -210,7 +210,7 @@ func SSEHandler(hub *broadcast.Hub, sessionMgr *session.Manager) http.HandlerFun
 
 // sseEventMatches 判断一条事件是否该发给这个订阅者（M21 起两种身份）。
 //
-// 抽成独立函数是为了**可测**：这段判据是 SSE 的越权边界（P0-S5），
+// 抽成独立函数是为了**可测**：这段判据是 SSE 的越权边界，
 // 而它长在一条长驻连接的读循环里，直接测连接既慢又容易 flaky。
 //
 //   - 会话通道（sessionID 非空）：本会话的事件照发；**无 session 的系统事件**也照发
@@ -233,7 +233,7 @@ func sseEventMatches(event broadcast.Event, sessionID, userID string) bool {
 // 与 `SSEHandler` 的两点不同，都是刻意的：
 //   - **不要求 `session_id`**：它服务的正是"用户没打开那个会话"的场景（全局角标）；
 //   - **身份只能来自 claims**：订阅键与过滤值都取自 `auth.GetClaims`，客户端传什么都不作数。
-//     否则任何人都能订阅别人的待办提醒（P0-S5 那条边界在用户维度上的对应物）。
+//     否则任何人都能订阅别人的待办提醒。
 //
 // 订阅键沿用 `SSEHandler` 的防顶替做法（`user:sub` 前缀 + 客户端随机 client_id）：
 // hub 在同键订阅时会关掉旧通道，直接采信 client_id 就能把别人的连接顶掉；

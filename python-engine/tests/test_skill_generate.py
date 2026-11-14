@@ -1,4 +1,4 @@
-"""D4：`skill_generate` 接真 LLM（方案 02 §5）。
+"""D4：`skill_generate` 接真 LLM。
 
 四条约定：
 

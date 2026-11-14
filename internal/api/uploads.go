@@ -73,7 +73,7 @@ var validUploadNameRe = regexp.MustCompile(`^[^\x00-\x1f/\\]+$`)
 // uuidRe 验证标准 UUID 格式（xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx），防止路径穿越。
 var uuidRe = regexp.MustCompile(`^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$`)
 
-// sanitizeUploadName 净化上传文件名（P0-S3 路径穿越修复）：
+// sanitizeUploadName 净化上传文件名：
 // 拒绝包含路径分隔符或空白的名字；剥离潜在遍历；限制长度。
 func sanitizeUploadName(name string) string {
 	name = strings.TrimSpace(name)
@@ -254,7 +254,7 @@ func (h *UploadHandler) PutChunk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 限制单分片大小，防止恶意客户端发送超大 chunk 撑爆磁盘（P1-1）
+	// 限制单分片大小，防止恶意客户端发送超大 chunk 撑爆磁盘
 	r.Body = http.MaxBytesReader(w, r.Body, 64<<20)
 	// P0 扩展性：分片写入存储后端（local/s3 统一），多副本下任意实例都能读取并合并。
 	// 0o600 保持原有"分片仅本进程可读"的隔离语义（本地后端生效；对象存储由 bucket 策略约束）。

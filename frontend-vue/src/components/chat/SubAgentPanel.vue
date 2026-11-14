@@ -176,7 +176,7 @@ watch(displayRuns, (list) => {
   if (next.size !== cancelling.value.size) cancelling.value = next
 })
 
-// ── 子 Agent 审批（P3-后续）──────────────────────────────────────────────
+// ── 子 Agent 审批──────────────────────────────────────────────
 //
 // 子 Agent 默认 tools_mode=auto，而 shell_exec 这类工具在 auto 下就需要确认 ——
 // 所以"子 Agent 请求审批"几乎每次调用命令类工具都会发生。此前它只以一行 notice
@@ -304,7 +304,7 @@ async function resolveAsk(toolCallId: string, answer: string) {
  * 只做一次乐观标记：**状态真相在引擎**（批准后子 Agent 会继续产出事件；
  * 拒绝则它收到 error 并在结果里体现），前端不伪造后续状态。
  *
- * `editedArguments`（C5）非空 ⇒ "**编辑后批准**"：回传 `decision: 'edit'` 与编辑后的
+ * `editedArguments`非空 ⇒ "**编辑后批准**"：回传 `decision: 'edit'` 与编辑后的
  * 完整参数；是否**真的执行**由引擎按编辑后参数重跑分级后决定（级别升高则不执行），
  * 前端不做本地放行判断。乐观标记仍记 `approved` —— 若引擎拦下，后续事件会体现出来。
  */
@@ -496,7 +496,7 @@ function dismissCostHint() {
 }
 
 // 实时流里出现了新 run（通常是刚委派的）→ 立刻刷新树，让卡片尽快出现
-/** 面板内部 tab（设计稿第四节 + 产物：运行 · 输出 · 用量 · 产物 · 事件流） */
+/** 面板内部 tab */
 const SA_TABS = [
   { id: 'runs', labelKey: 'chat.tabs.runs' },
   { id: 'output', labelKey: 'chat.tabs.output' },
@@ -610,7 +610,7 @@ onBeforeUnmount(() => {
       </span>
     </div>
 
-    <!-- 面板内部 tab（设计稿第四节）：运行 / 输出 / 用量 / 事件流。
+    <!-- 面板内部 tab：运行 / 输出 / 用量 / 事件流。
          前两个是"看过程"，后两个是"算花销"与"排查原始事件"。
          用 v-show 而非重排 DOM：保留既有树与输出的全部逻辑，只切换可见性。 -->
     <nav

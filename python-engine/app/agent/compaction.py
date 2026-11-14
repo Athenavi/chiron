@@ -69,7 +69,7 @@ class CompactionConfig:
     #: 于是所有模型共用一个预算 —— 对大窗口模型过于激进（明明还有空间就开始丢上下文），
     #: 对小窗口模型又不够安全。显式配置仍然优先（租户/模式可按自己的口径覆盖）。
     max_context_tokens: int = 0
-    #: 本次压缩针对的模型名（C4）：非空时 token 估算走该模型的**校准系数**，
+    #: 本次压缩针对的模型名：非空时 token 估算走该模型的**校准系数**，
     #: 空则用历史近似（4 chars ≈ 1 token）。
     model: str = ""
     threshold_ratio: float = PRUNE_THRESHOLD
@@ -101,7 +101,7 @@ def _estimate_tokens(messages: list[dict[str, Any]], model: str = "") -> int:
 
     有 `model` 时走**校准系数**（C4，`app/agent/model_window.py`）：provider 每轮回传真实
     `input_tokens`，用它反推该模型的分词密度并指数平滑 —— 比换词表（tiktoken）更准，
-    且不必新增依赖（评审 01 §1.7 的三条理由）。
+    且不必新增依赖（理由见 `app/agent/model_window.py` 模块文档）。
 
     无 `model` 时保持历史近似（4 chars ≈ 1 token），供不关心模型差异的调用点使用。
     """

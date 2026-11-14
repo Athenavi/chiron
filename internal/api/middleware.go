@@ -241,7 +241,7 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 			"trace_id", GetTraceID(r.Context()),
 		)
 
-		// Write audit log for non-GET requests (P0-性能: 异步写入，不阻塞响应返回)
+		// Write audit log for non-GET requests
 		if r.Method != "GET" && r.Method != "OPTIONS" && rw.status < 500 {
 			claims := auth.GetClaims(r.Context())
 			if claims != nil {
@@ -406,7 +406,7 @@ func AuthMiddleware(a *auth.Authenticator) func(http.Handler) http.Handler {
 						apiKeyAuthQuery,
 						hex.EncodeToString(keyHash[:])).Scan(&keyID, &userID, &role, &tenantID, &keyIssuedAt)
 					if err == nil {
-						// P1-5: tenant_id 为空直接拒绝，不再回退 DefaultTenantID。
+						// tenant_id 为空直接拒绝，不再回退 DefaultTenantID。
 						// 历史数据中 tenant_id=NULL 的 user 走 DefaultTenantID 会落到默认租户，
 						// 造成跨租户数据访问；多租户部署必须强制每个用户绑定租户。
 						if tenantID == "" {

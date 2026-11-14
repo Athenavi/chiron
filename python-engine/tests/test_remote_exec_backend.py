@@ -147,7 +147,7 @@ async def test_tenant_outside_whitelist_stays_local():
 
 @pytest.mark.asyncio
 async def test_empty_whitelist_routes_everyone():
-    """空名单 = **全部租户走服务**（P0-1：沙箱隔离默认生效）。
+    """空名单 = **全部租户走服务**。
 
     旧语义（空名单谁都不走）会让默认配置下的隔离形同虚设；现改为默认全走 ——
     豁免个别租户用白名单，整体退出用 `SANDBOX_BACKEND=local`。
@@ -218,7 +218,7 @@ async def test_malformed_response_fails_without_falling_back():
 
 
 def test_this_backend_carries_no_second_copy_of_the_baseline():
-    """设计稿 §4 的核心取舍：宁可共享一份实现，也不要第二份"看起来一样"的白名单。
+    """的核心取舍：宁可共享一份实现，也不要第二份"看起来一样"的白名单。
 
     因此本模块**不得**自带白名单 / RLIMIT —— 它只负责转发；基线仍由服务侧 import
     `app/tools/sandbox.py` 的同一份实现。

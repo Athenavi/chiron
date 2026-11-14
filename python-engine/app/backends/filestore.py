@@ -1,4 +1,4 @@
-"""经网关 FileStore 的文件后端（批 B 片 4，方案 02 §3.4）。
+"""经网关 FileStore 的文件后端。
 
 **解决什么**：agent 的文件工具此前只认本地 `workspace_dir()`，多副本部署下"写 A 副本、
 读 B 副本"会间歇性失忆（`app/tools/sandbox.py` 的注释已自陈该风险）。走这里之后，文件落在
@@ -9,7 +9,7 @@
 （见 `internal/api/internal_storage_handler.go`）。
 
 **失败语义**：`base_url` 未配置或网关不可达时，操作返回**结构化错误**而不是空内容 ——
-"没有这个文件"与"读不到"必须能区分（方案 02 §3.4 的完成标准之一）。
+"没有这个文件"与"读不到"必须能区分。
 
 `stat` / `ls` / `glob` 都基于网关的 `list`（一次拿全树），因此 `glob` 场景下不会
 逐文件读全文 —— 那在 100 个文件时就是 100 次跨进程读。
@@ -326,7 +326,7 @@ def build_filestore_backend_from_settings() -> FileStoreBackend | None:
     """按配置构造 FileStore 后端；未配置网关地址时返回 `None`（保持默认本地后端）。
 
     开关是 `BACKEND_KIND=filestore`（默认 `local`）—— 显式选择，不做"猜部署形态"那一套
-    （与评审 02 §1 的结论一致：判定部署形态不可靠，显式开关才可审计）。
+    （同一结论：判定部署形态不可靠，显式开关才可审计）。
     """
     from app.config import settings
 

@@ -1,4 +1,4 @@
-"""C1 批 3+：run 恢复路径与 reconciler（方案 01 §3.1）。
+"""C1 批 3+：run 恢复路径与 reconciler。
 
 两件事：
 
@@ -7,7 +7,7 @@
    窗口判定沿用批 2 的 `resume_window`：热 1h / 冷 24h / 超窗 `abandoned`（**可见**，不静默）。
 2. **reconciler**：找出"旧主已死"的僵尸 run 并把状态修正为可续跑/已放弃 + 记指标。
 
-**接管的语义边界（与方案措辞的一处偏离，见评审 03 §17.2）**：方案写"reconciler 自动接管"，
+**接管的语义边界**：常见实现是"reconciler 自动接管"，
 但自动续跑需要**重建 `AgentTask`**（llm_config / workbench_context / tools 等只存在于**提交请求**里，
 引擎持久层没有稳定来源）。用半个 task 去续跑比不续跑更危险，因此本实现里：
 
@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-#: reconciler 扫描周期（秒）与单轮上限（方案 §3.1：周期 60s + LIMIT 20 + 每实例抖动）
+#: reconciler 扫描周期（秒）与单轮上限：周期 60s + LIMIT 20 + 每实例抖动
 RECONCILE_INTERVAL_SECONDS = 60.0
 RECONCILE_BATCH_LIMIT = 20
 #: 判定"旧主已死"的超龄阈值（秒）。必须 **> Go 侧运行锁 TTL（5min）**：
@@ -108,7 +108,7 @@ async def load_resume_state(
 
     window = ckpt.resume_window(snapshot)
     if window == "abandoned":
-        # 超窗：**可见**地放弃（方案 §3.1 的降级路径必须显式），并回落现状语义
+        # 超窗：**可见**地放弃（降级路径必须显式），并回落现状语义
         if awaiting_token:
             # `mark()` 的谓词只认活跃状态 ⇒ 对挂起行是 0 命中；不单独收尾就会永远停在
             # `awaiting_input`，之后每一次 run 都白读一遍这份超窗现场。

@@ -1,8 +1,8 @@
-"""ACP 适配层：把 Chiron 的 HTTP API 包成 ACP 的 `Agent`（方案 03 §5 · 批 I）。
+"""ACP 适配层：把 Chiron 的 HTTP API 包成 ACP 的 `Agent`。
 
-## 为什么用 Python + 官方 SDK，而不是设计稿原来推荐的 Go
+## 为什么用 Python + 官方 SDK，而不是原来推荐的 Go
 
-设计稿推荐 Go（复用批 F 的 `/submit` + `/events` + 审批处理，**零新增依赖**）。真正动手时看清了
+推荐 Go（复用批 F 的 `/submit` + `/events` + 审批处理，**零新增依赖**）。真正动手时看清了
 ACP 的 wire 协议规模：它有 20+ 个 schema 类型（`InitializeResponse` / `NewSessionResponse` /
 `PromptResponse` / `ToolCallStart` / `ToolCallUpdate` / `PermissionOption` / `AgentPlanUpdate` …），
 且官方 SDK 已经提供了**方法分发与 stdio 服务端**。用 Go 自己实现这些，等于把"协议正确性"押在

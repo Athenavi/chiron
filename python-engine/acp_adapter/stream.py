@@ -1,4 +1,4 @@
-"""HTTP + SSE 客户端（ACP 适配层用）—— 与 headless CLI（批 F）走同一条路。
+"""HTTP + SSE 客户端（ACP 适配层用）—— 与 headless CLI走同一条路。
 
 **为什么单独一层**：它的输入输出是"事件字典的异步迭代"，与 ACP / SDK 完全无关 —— 因此能用
 httpx 的 `MockTransport` 完整单测（不需要引擎、不需要 SDK）。`agent.py` 只负责把这些事件交给 SDK。

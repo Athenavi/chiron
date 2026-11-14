@@ -88,7 +88,7 @@ type tenantQuotaEnforcer struct {
 
 // EnforceTenantQuota 是聊天请求的租户 token 配额预检（fail-open）。
 //
-// 语义（P0-3：计数单位必须是 token，不是请求条数）：
+// 语义：
 //   - 租户无 token 配额池配置 → 直接放行（reserved=0，nil）。
 //   - Redis 计数器 ent:quota:tokens:{tenantID}:{yyyymm|yyyymmdd} 按 **estimatedTokens**
 //     INCR（Lua 原子自增 + 周期末过期）；缓存键缺失时先从 billing_records SQL 聚合回填。

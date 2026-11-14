@@ -105,7 +105,7 @@ async def read_file(path: str, offset: int = 0, limit: int = READ_FILE_DEFAULT_L
     from app.tools.fs_guard import observe
     from app.tools.sandbox import safe_join
 
-    # 批 B：文件读经**后端**（默认 = 本地工作区，行为与迁移前一致）
+    # 文件读经**后端**（默认 = 本地工作区，行为与迁移前一致）
     result = await get_backend().read(path, offset=offset, limit=limit)
     if result.error:
         return {"error": result.error}
@@ -184,7 +184,7 @@ async def read_image(path: str, max_bytes: int = 0) -> dict[str, Any]:
     backend = get_backend()
     target = safe_join(path)  # 沙箱隔离（S 安全修复）
 
-    # 批 B：大小与字节都经后端（默认 = 本地工作区）
+    # 大小与字节都经后端（默认 = 本地工作区）
     info = await backend.stat(path)
     if info is None:
         return {"error": f"file not found: {path}"}
@@ -249,7 +249,7 @@ async def write_file(
     # 写入前快照：`/undo` 据此**真正恢复**文件（此前 /undo 只是回显一个字符串）。
     # 快照存不下（文件过大 / 存储不可用）时**当场告知"本次不可撤销"**，而不是事后才发现。
     undo_note = await undo_stack.snapshot_before_write(get_session_id(), target, "write_file")
-    # 批 B：写入经**后端**（默认 = 本地工作区；建父目录也由后端负责）
+    # 写入经**后端**（默认 = 本地工作区；建父目录也由后端负责）
     backend = get_backend()
     written = await (backend.append(path, content) if mode == "append" else backend.write(path, content))
     if written.error:
@@ -288,7 +288,7 @@ async def grep_files(
     max_results: int = 200,
     max_per_file: int = GREP_MAX_PER_FILE,
 ) -> dict[str, Any]:
-    """按正则搜索文件内容（批 B：匹配与读取都经后端）。
+    """按正则搜索文件内容（匹配与读取都经后端）。
 
     候选文件由 `**/{glob}` 限定 → 逐个**分页**扫描 → 逐行匹配 → 命中达上限即返回。
 
@@ -391,7 +391,7 @@ def _grep_result(
 async def search_files(
     pattern: str, root: str = ".", max_results: int = 200
 ) -> dict[str, Any]:
-    """按文件名模式搜索（批 B：匹配经后端）。
+    """按文件名模式搜索（匹配经后端）。
 
     与 `glob_files` 的区别是**自动递归**（`**/` 前缀）—— 这是既有行为差异，保留。
     """

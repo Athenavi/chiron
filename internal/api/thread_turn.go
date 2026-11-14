@@ -19,7 +19,7 @@ import (
 // 与 `thread_delivery.go`（入队/认领/收尾三件事）分开：那一层只跟表打交道，
 // 这一层只跟回合打交道。两者通过 `threadDelivery` 这一个值交接。
 //
-// 三个硬约束（roadmap P1-1.2 已记）在这里各落一处：
+// 三个硬约束在这里各落一处：
 //  ① 入口处已持锁 ⇒ 第一条**原地直跑**（`launchThreadTurn` 接受现成资源），
 //     不先入队再 drain 一轮。
 //  ② 续跑必须发生在**释放运行锁之后**，且用**未取消的父 ctx** —— 见 `launchThreadTurn`
@@ -161,7 +161,7 @@ func startThreadTurn(parent context.Context, deps threadTurnDeps, d threadDelive
 	}
 	if !locked {
 		// 会话正忙：留在队里，由当前持有者在收尾时 drain。这与用户提交被拒要立刻
-		// 告诉人不同 —— 后台事件本来就没人盯，排队才是对的（roadmap P1-1.1 第 4 条）。
+		// 告诉人不同 —— 后台事件本来就没人盯，排队才是对的。
 		slog.Debug("thread delivery: session busy, event stays queued",
 			"session", prep.body.SessionID)
 		return false

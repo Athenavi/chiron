@@ -166,7 +166,7 @@ func NewGatewayRouter(
 ) http.Handler {
 	mux := http.NewServeMux()
 
-	// 运行时 CORS 白名单注入（批 B-2′）：CORSMiddleware / checkWebSocketOrigin / billing 统一读该共享源
+	// 运行时 CORS 白名单注入：CORSMiddleware / checkWebSocketOrigin / billing 统一读该共享源
 	SetCORSAllowOrigin(cfg.CORSOrigins)
 
 	// SSE 发布管线指标（B2）：hub 改为异步发布后，`fallback > 0` 表示队列曾被写满
@@ -277,7 +277,7 @@ func NewGatewayRouter(
 	// 注册流程复用邮件能力（邮箱验证码校验 + 欢迎邮件）
 	authHandler.SetMailHandler(mailHandler)
 
-	// 通知中心（P2-3）：站内信 + 可选邮件。邮件出口复用上面的 MailHandler，
+	// 通知中心：站内信 + 可选邮件。邮件出口复用上面的 MailHandler，
 	// 于是 SMTP 配置仍只有 `ent_mail_config` 一处真相源。
 	// 未配置邮件时 NewNotifyMailer 返回 nil，notify.Manager 只发站内信。
 	notifyMgr := notify.NewManager(notify.NewPGStore(), NewNotifyMailer(mailHandler))
@@ -309,13 +309,13 @@ func NewGatewayRouter(
 		slog.Error("billing schema verification failed; run `alembic upgrade head`", "error", err)
 	}
 	billingMgr := billing.NewManager(billingStore)
-	// 支付成功等业务事件经统一出口写入通知中心（P2-3）。幂等由去重键保证：
+	// 支付成功等业务事件经统一出口写入通知中心。幂等由去重键保证：
 	// 同一订单的重复回调查到唯一索引冲突即跳过，不会重复推送。
 	billingMgr.SetNotifier(notifyMgr)
 	// M19：崩溃/自动接管那一段从不经过网关 ⇒ 网关按终态事件计费永远看不到它。
 	// 这里起一个按-run 权威账对账的后台循环；默认 shadow（只算、打指标、不动账）。
 	StartRunUsageReconciler(lifecycleCtx, billingMgr)
-	// 到期预警（P2-3）：周期性扫描即将到期的权益，提前 3 天与 1 天各提醒一次。
+	// 到期预警：周期性扫描即将到期的权益，提前 3 天与 1 天各提醒一次。
 	//
 	// 它**只发通知、不改状态** —— 权益是否生效完全由 starts_at/expires_at 与当前
 	// 时间比较决定，没有 status 列要维护，所以漏跑一轮不会让权益错乱，重启后
@@ -383,18 +383,18 @@ func NewGatewayRouter(
 	// Billing handler (uses the same billingMgr as /submit to avoid split-brain cache)
 	billingHandler := NewBillingHandler(billingMgr, authenticator, cfg)
 
-	// 新用户引导（P0-3）：三步进度读写。余额取自同一个 billingMgr，
+	// 新用户引导：三步进度读写。余额取自同一个 billingMgr，
 	// 避免与 /v1/billing/balance 出现两份不一致的缓存。
 	onboardingHandler := NewOnboardingHandler(billingMgr)
 
-	// 用户级 API Key 自助（P1-3 / roadmap §11.3）：api_keys 表早已在鉴权链路里，
+	// 用户级 API Key 自助：api_keys 表早已在鉴权链路里，
 	// 但此前没有任何写路径 —— 用户只能手工插表才能拿到 key。
 	apiKeyHandler := NewAPIKeyHandler()
 
-	// 工单式发票申请（P1-2 / roadmap §11.4）：用户提交、管理员审核、线下开票。
+	// 工单式发票申请：用户提交、管理员审核、线下开票。
 	// 一期只做全额开票 + 不可撤销（§11.4 已定口径）。
 	invoiceHandler := NewInvoiceHandler()
-	// 审核结果通知申请人（P1-8）：审核发生在管理端，申请人只能靠这条通知知道结果。
+	// 审核结果通知申请人：审核发生在管理端，申请人只能靠这条通知知道结果。
 	// 装配失败不影响审核本身（notifyReviewResult 内部只告警）。
 	invoiceHandler.SetNotifier(notifyMgr)
 
@@ -430,7 +430,7 @@ func NewGatewayRouter(
 	// （见 purgeDueAccounts 的 nil 分支）—— "先归档后才删"是硬约束。
 	StartAccountPurgeSweep(lifecycleCtx, time.Hour, fileStore)
 
-	// 系统设置变更订阅（批 B-2′）：rate_limit / cors / payment / storage 跨副本即时热更。
+	// 系统设置变更订阅：rate_limit / cors / payment / storage 跨副本即时热更。
 	// 必须晚于 billingHandler 构造：订阅者需要它来重载 payment 分类的支付凭据。
 	StartSettingsSubscriber(lifecycleCtx, atomicRedis, distLimiter, billingHandler, settingsStore, fileStore)
 
@@ -520,13 +520,13 @@ func NewGatewayRouter(
 	registerMediaRoutes(mux, mediaHandler, authMW, rlMW, cfg.StorageRoot)
 	registerPluginRoutes(mux, pluginHandler, authMW, rlMW)
 	registerBillingRoutes(mux, billingHandler, authMW, rlMW)
-	// 新用户引导（P0-3）：用户级自助，身份取自 token。
+	// 新用户引导：用户级自助，身份取自 token。
 	onboardingHandler.RegisterRoutes(mux, authMW, rlMW)
-	// 用户级 API Key 自助（P1-3）：普通用户路由，越权靠 SQL 的 user_id 条件挡住。
+	// 用户级 API Key 自助：普通用户路由，越权靠 SQL 的 user_id 条件挡住。
 	apiKeyHandler.RegisterRoutes(mux, authMW, rlMW)
-	// 发票申请（P1-2）：用户侧 GET/POST /v1/billing/invoices。
+	// 发票申请：用户侧 GET/POST /v1/billing/invoices。
 	invoiceHandler.RegisterRoutes(mux, authMW, rlMW)
-	// 通知中心（P2-3）：用户侧 GET /v1/notifications + 已读 + 邮件偏好。
+	// 通知中心：用户侧 GET /v1/notifications + 已读 + 邮件偏好。
 	// 全部只操作当前登录用户自己的通知（user_id 取自 claims，不接受外部传入）。
 	NewNotificationHandler(notifyMgr).RegisterRoutes(mux, authMW, rlMW)
 	registerProxyRoutes(mux, authMW, rlMW, kbRateMW, pythonClient)
@@ -603,7 +603,7 @@ func NewGatewayRouter(
 	go whDispatcher.Start(lifecycleCtx)
 	NewEntWebhookHandler().RegisterRoutes(mux, authMW, rlMW, cfg)
 
-	// RPA 跨实例桥接（批 D）：订阅 rpa:cmd/rpa:res，让插件 WS 与 exec 请求可落在不同网关副本。
+	// RPA 跨实例桥接：订阅 rpa:cmd/rpa:res，让插件 WS 与 exec 请求可落在不同网关副本。
 	// rpaHub 由 NewGatewayRouter 的调用方（main.go）以 db.Redis 构造；Redis 不可用时为 localOnly 空操作。
 	rpaHub.Start(lifecycleCtx)
 

@@ -10,7 +10,7 @@ import (
 	"github.com/athenavi/chiron/internal/id"
 )
 
-// 套餐目录后台管理（P2-2c）的真库测试。
+// 套餐目录后台管理的真库测试。
 //
 // 单独成文件而不是塞进 entitlements_live_test.go：那边测的是"购买 → 发权益"的
 // 用户侧链路，这里测的是运营侧对目录的增改下架，两者的失败模式完全不同。

@@ -32,7 +32,7 @@ func emitNotification(ctx context.Context, w notificationWriter, n *notify.Notif
 	}
 }
 
-// notifyMemberJoined 通知新加入的成员本人（P2-3 的 member_invited）。
+// notifyMemberJoined 通知新加入的成员本人。
 //
 // 为什么通知本人而不是"发出邀请的管理员"：新成员刚注册完，最需要确认的是
 // "我确实进了这个团队"，这也是这条通知唯一有信息量的读者。

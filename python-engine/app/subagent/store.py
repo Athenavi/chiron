@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 #: 终态白名单：指标标签只允许这几个值，未知状态归到 "other"。
 #: 标签必须有界 —— 否则一次笔误（例如 status="Completed"）就会在 Prometheus 里
 #: 分裂出新的时间序列，把"状态机是否收敛"的统计彻底打乱。
-#: A5（方案 04 §3）：`partial` = **部分完成**（有产物但不完整，例如撞上 wall 预算时）。
+#: A5：`partial` = **部分完成**（有产物但不完整，例如撞上 wall 预算时）。
 #: 它与 `failed` 的差别是"有没有可用产出"，与 `cancelled` 的差别是"谁停的"——三者都算终态。
 #: 参照 Reasonix 的 7 阶段里的 `child_partial`。
 _TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled", "lost", "partial"})
@@ -137,7 +137,7 @@ SELECT COALESCE(sum(t.input_tokens + t.output_tokens), 0)::bigint AS tokens,
  WHERE t.session_id = $1 AND u.tenant_id = $2
 """
 
-#: A5（方案 04 §3）：生命周期遥测**单独写**，与上面两条同理由 —— 未迁移
+#: A5：生命周期遥测**单独写**，与上面两条同理由 —— 未迁移
 #: （0006_subagent_lifecycle）的库只会丢这几列，不会让子 Agent 的收尾 UPDATE 整条失败。
 #:
 #: 五列都是 **content-free** 的：`retryable` 是"值不值得重试"的判断，`output_bytes` 是体量

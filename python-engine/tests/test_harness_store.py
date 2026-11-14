@@ -1,4 +1,4 @@
-"""租户/用户级 harness 配置（P1-④）—— 读侧与接线。
+"""租户/用户级 harness 配置—— 读侧与接线。
 
 这一层是 Chiron 相对 deepagents 的**超越项**：deepagents 的 harness profile 只能由部署方
 在代码里注册（`register_harness_profile`），而这里下沉到租户级 / 用户级。

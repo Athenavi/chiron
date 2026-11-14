@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 租户 / 用户级 harness 塑形配置（P1-④ 批 B）。
+ * 租户 / 用户级 harness 塑形配置。
  *
  * * `scope="user"` —— 写自己的（`/v1/settings/harness-profiles`，鉴权只需登录）；
  * * `scope="tenant"` —— 租户级默认（`/v1/admin/settings/harness-profiles`，需 PermPolicyManage）。

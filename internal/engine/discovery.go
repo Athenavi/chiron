@@ -9,7 +9,7 @@ import (
 	"github.com/athenavi/chiron/internal/db"
 )
 
-// ── 引擎实例自动发现（批 E1）──
+// ── 引擎实例自动发现──
 //
 // 背景：网关的引擎地址来自静态 PYTHON_ENGINE_ADDRESS，扩容/缩容需人工同步并滚动重启。
 // 本模块每 15s 从 Redis 引擎注册表（python-engine 启动后写入

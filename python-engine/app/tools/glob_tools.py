@@ -14,7 +14,7 @@ async def glob_files(pattern: str, root: str = ".") -> dict[str, Any]:
     """
     from app.backends.context import get_backend
 
-    # 批 B：匹配经**后端**（默认 = 本地工作区）。
+    # 匹配经**后端**（默认 = 本地工作区）。
     #
     # 沙箱隔离（S 安全修复）：此前这里是 `Path(root).resolve()` —— 没有任何沙箱，
     # 等于以**进程 CWD** 为根。实测 `glob_files(pattern="README*", root=".")` 会返回仓库外的

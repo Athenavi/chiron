@@ -1,4 +1,4 @@
-"""skill_catalog — 技能目录注入（方案 02 §5 的 D2 / D5 / D7）。
+"""skill_catalog — 技能目录注入（D2 / D5 / D7）。
 
 三条约定：
 

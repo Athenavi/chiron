@@ -181,7 +181,7 @@ class ProfileStore:
     async def get_by_key(
         self, tenant_id: int, user_id: str, slot: str, item_key: str, project: str = ""
     ) -> MemoryEntry | None:
-        """按 (tenant, user, project, slot, key) 取一条 —— 与唯一约束同一组键（C3）。"""
+        """按 (tenant, user, project, slot, key) 取一条 —— 与唯一约束同一组键。"""
         sql = (
             f"SELECT {_COLUMNS} FROM user_memory_entries "
             "WHERE tenant_id=$1 AND user_id=$2 AND slot=$3 AND item_key=$4 AND project=$5"

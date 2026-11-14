@@ -44,7 +44,7 @@ def _scope(request: Request) -> tuple[int, str]:
 
 
 def _project(request: Request) -> str:
-    """项目维（C3）：从 query 读 `project`；**空 = 未分组**（缺省）。
+    """项目维：从 query 读 `project`；**空 = 未分组**（缺省）。
 
     放在 query 而不是 body，是为了让 GET / DELETE 这些没有 body 的端点也统一 ——
     前端只需在请求 URL 上带 `?project=...`，各端点口径就完全一致。

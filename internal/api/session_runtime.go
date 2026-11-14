@@ -350,7 +350,7 @@ func ResolveSessionAgentConfig(
 	return h.resolveAgentConfig(userID, state, defaults, explicit)
 }
 
-// InjectSessionRuntime 在代理转发前，用会话运行时状态补齐 mode / model / provider（P1-c）。
+// InjectSessionRuntime 在代理转发前，用会话运行时状态补齐 mode / model / provider。
 //
 // 专用于**统一链路** `/v1/chat/submit`：该路由走通用代理，Go 侧此前完全不看 body，
 // 于是前端在 `llm_config` 里带的 mode/model 被引擎侧（`unified_executor.submit_chat`

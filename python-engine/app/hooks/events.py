@@ -1,4 +1,4 @@
-"""批 G 生命周期 hook 的事件集与上下文契约（方案 03 §3.1）。
+"""批 G 生命周期 hook 的事件集与上下文契约。
 
 保留**引擎侧有真实对应点**的 8 个事件。deepagents 的 client 侧事件
 （`PermissionRequest` / `Notification`）在 Chiron 无对应进程 —— 硬造会变成

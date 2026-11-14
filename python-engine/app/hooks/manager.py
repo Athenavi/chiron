@@ -1,10 +1,10 @@
-"""批 G：生命周期 hook 的注册表与执行编排（方案 03 §3）。
+"""生命周期 hook 的注册表与执行编排。
 
 对外门面是模块级单例 `hooks`。runtime 只与**事件方法**交互
 （`session_start` / `before_tool_use` / `after_tool_use` / `subagent_start` /
 `subagent_stop` / `stop`），不直接接触注册表或沙箱。
 
-三条硬约束（方案 03 §3.2）：
+三条硬约束：
 1. **默认关**：`settings.hooks_enabled=False` 时所有事件方法立即返回 —— 开启前零行为变化；
 2. **只有 `PreToolUse` 可阻断**：其余事件 fire-and-forget，失败/超时/崩溃都不改主流程；
 3. **多租户下用户无法注册 hook**：`owner` 区分部署级与租户级，用户自定义需
@@ -244,7 +244,7 @@ class HookManager:
         """注册一个 hook，返回是否成功。
 
         用户自定义 hook（`owner=OWNER_USER`）在 `hooks_allow_user_defined=False`
-        时被**拒绝**（多租户下用户无法注册 hook，方案 03 §3.2），并留一条审计 ——
+        时被**拒绝**（多租户下用户无法注册 hook，），并留一条审计 ——
         误开的 SaaS 部署要能从日志里看见"有人试图注册租户 hook"。
 
         部署级注册不受 `hooks_allow_user_defined` 限制，但**是否执行**仍受总开关
@@ -629,7 +629,7 @@ hooks = HookManager()
 
 
 def warn_if_user_defined_enabled() -> None:
-    """启动告警：用户自定义 hook 被打开时给出**显著**日志 + 审计（方案 03 §3.2）。
+    """启动告警：用户自定义 hook 被打开时给出**显著**日志 + 审计。
 
     "SaaS 部署误开必须可见"是显式开关路线的可见性要求（既然排除了不可靠的
     部署形态判定，就靠这行告警兜底）。由 `app/main.py` 的启动流程调用 ——

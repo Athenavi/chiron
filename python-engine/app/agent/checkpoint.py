@@ -1,10 +1,10 @@
-"""run 现场 checkpoint（方案 01 §3.1、评审 01 §一）—— **C1 批 2：只写不读**。
+"""run 现场 checkpoint —— **只写不读**。
 
 本批只做「建表 + 回合末落盘」，**不接恢复路径**：这样即使写入有问题也不影响对话本身
 （写入失败只降级「恢复粒度」）。
-恢复（用户重试 / reconciler）在批 3 接入。
+恢复（用户重试 / reconciler）尚未接入。
 
-三条形状 / 边界约定（评审 01 §1.2、§1.3、§1.5）：
+三条形状 / 边界约定：
 
 * ``messages``：**尾部窗口（按 token 预算）+ 既有压缩摘要**；下限保证最近 2 个完整回合 ——
   否则 `assistant(tool_calls)` / `tool` 配对会断在快照边上（那正是
@@ -17,7 +17,7 @@
 
 状态机：`running` / `checkpointed` / `resuming` / `completed` / `failed` / `cancelled` / `abandoned`。
 其中 `running → checkpointed` 的判定**不在引擎内部**（故障进程无法自证死亡），由接管方依据
-run 租约过期 + 会话运行锁可获取来判定（方案 01 §3.1）。
+run 租约过期 + 会话运行锁可获取来判定。
 第八个取值 `awaiting_input`（M7，见 `load_awaiting` / `claim_awaiting`）**刻意不属于活跃集合**。
 """
 
@@ -97,7 +97,7 @@ MAX_TRACKED_TURN_IDS = 512
 
 
 class RunCheckpoint(TypedDict, total=False):
-    """回合边界快照。字段语义见模块文档与方案 01 §3.1。"""
+    """回合边界快照。字段语义见模块文档与。"""
 
     #: A2：写入时的 schema 版本（见 `SNAPSHOT_SCHEMA_VERSION`）。读取侧据此拒绝未知版本。
     schema_version: int
@@ -181,7 +181,7 @@ def build_snapshot(
     max_tail_messages: int = SNAPSHOT_MAX_TAIL_MESSAGES,
     min_tail_messages: int = SNAPSHOT_MIN_TAIL_MESSAGES,
 ) -> RunCheckpoint:
-    """构造快照：**尾部窗口 + 既有压缩摘要**（评审 01 §1.2）。
+    """构造快照：**尾部窗口 + 既有压缩摘要**。
 
     为什么不是整段：会话消息已有 PG `messages` 表与 Redis 缓存，checkpoint 只需"能重放的最小现场"。
 
@@ -575,7 +575,7 @@ def resume_window(checkpoint: RunCheckpoint) -> str:
     """按快照的保存时间判定恢复窗口：`hot` / `cold` / `abandoned`。
 
     这是"用户无感"承诺的**前提**：热窗口内缺口由 SSE 重放补齐；冷窗口内只能续跑、
-    不能承诺事件补齐（评审 01 §1.5）。
+    不能承诺事件补齐。
     """
     saved_at = str(checkpoint.get("saved_at", "") or "")
     if not saved_at:

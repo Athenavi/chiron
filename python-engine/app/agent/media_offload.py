@@ -1,4 +1,4 @@
-"""C2 段 c：内联媒体卸载 + 历史参数截断（方案 01 §3.2）。
+"""C2 段 c：内联媒体卸载 + 历史参数截断。
 
 两个动作，都在**压缩前**发生，目标是"让历史变小，但不丢内容"：
 
@@ -35,7 +35,7 @@ DATA_URL_RE = re.compile(
 DEFAULT_MIN_BYTES = 8 * 1024
 #: 单个内联块的解码上限：挡住"解码一个 200MB 的 data URL"这种内存放大
 MAX_INLINE_BYTES = 8 * 1024 * 1024
-#: 参数截断的标注（与方案 §3.2 的措辞一致，便于日志/测试检索）
+#: 参数截断的标注（措辞统一，便于日志与测试检索）
 TRUNCATION_MARK = "...(argument truncated)"
 
 def _media_store() -> Any:

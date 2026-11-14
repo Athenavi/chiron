@@ -10,9 +10,9 @@ import (
 	"github.com/athenavi/chiron/internal/db"
 )
 
-// thread_subscription.go —— P1-1 订阅 CRUD（roadmap 验收项的最后一块）。
+// thread_subscription.go —— P1-1 订阅 CRUD。
 //
-// 订阅回答的是"这条事件该投给哪个会话"。roadmap 明确：**无订阅则该事件到此为止**，
+// 订阅回答的是"这条事件该投给哪个会话"。明确：**无订阅则该事件到此为止**，
 // 不回退给 Router 猜 —— 否则"有没有订阅"就不可观测，§6 要的那组对照埋点也就做不了。
 // 因此这一层的正确性直接决定埋点能否成立，判据一律用 `user_id`（不是 `tenant_id`）：
 // 订阅是个人授权行为，同租户的其他用户不该能改别人的投递去向。

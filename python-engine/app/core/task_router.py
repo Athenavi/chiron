@@ -125,7 +125,7 @@ class TaskRouter:
 
         try:
             # ── 阶段 1: 意图理解 ─────────────────────────────────────
-            # 会话运行时状态（P1-d）：统一链路的模型/provider 选择在此进入意图理解。
+            # 会话运行时状态：统一链路的模型/provider 选择在此进入意图理解。
             # 此前这里没有传，于是意图理解恒用写死的 gpt-4o-mini。
             llm_config = (context or {}).get("llm_config") or {}
             llm_model = str(llm_config.get("model") or "")
@@ -221,7 +221,7 @@ class TaskRouter:
         1. 尝试调用 LLM (如果 gateway 可用)
         2. 降级到关键词提取 (LLM 不可用时)
 
-        model / provider_hint / tenant_id 来自**会话运行时状态**（P1-d，docs/session-runtime-spec.md）。
+        model / provider_hint / tenant_id 来自**会话运行时状态**。
         此前这条链路把模型写死为 gpt-4o-mini，导致用户在界面上切换模型/提供商
         对统一链路（/v1/chat/submit）完全无效。
         """
@@ -256,7 +256,7 @@ class TaskRouter:
     ) -> dict[str, Any]:
         """使用 LLM 理解用户意图 (生产级实现)
 
-        model/provider_hint/tenant_id 由 route_task 从会话运行时状态注入（P1-d）；
+        model/provider_hint/tenant_id 由 route_task 从会话运行时状态注入；
         为空时回落默认轻量模型，保持既有行为不变。
         """
         from app.main import get_gateway
@@ -291,7 +291,7 @@ Return ONLY valid JSON without markdown formatting."""
             ChatMessage(role="user", content=prompt),
         ]
 
-        # 调用 LLM：模型/provider 来自会话运行时状态（P1-d）；tenant_id 传入使租户路由生效
+        # 调用 LLM：模型/provider 来自会话运行时状态；tenant_id 传入使租户路由生效
         response_text = ""
         async for chunk in gateway.chat_stream(
             messages=messages,

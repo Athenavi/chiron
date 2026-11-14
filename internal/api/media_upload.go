@@ -59,7 +59,7 @@ func (h *MediaHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	}
 	head = head[:n]
 
-	// P1-6: 用 magic bytes 检测真实 MIME，避免客户端伪造 Content-Type 上传可执行文件
+	// 用 magic bytes 检测真实 MIME，避免客户端伪造 Content-Type 上传可执行文件
 	declaredMIME := truncateMIME(header.Header.Get("Content-Type"))
 	detectedMIME := truncateMIME(http.DetectContentType(head))
 	// 优先采用检测到的 MIME；声明与检测不一致时以检测为准（更安全）
@@ -69,7 +69,7 @@ func (h *MediaHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		mimeType = declaredMIME
 	}
 	// 拒绝可执行/脚本类 MIME（即使客户端伪装为图片）
-	// P1-6: 传入文件名以便扩展名兜底（PE/ELF magic bytes 只检测为 octet-stream）
+	// 传入文件名以便扩展名兜底（PE/ELF magic bytes 只检测为 octet-stream）
 	if isExecutableMIME(mimeType, header.Filename) {
 		BadRequest(w, "file type not allowed: "+mimeType)
 		return
@@ -386,7 +386,7 @@ func truncateMIME(mime string) string {
 }
 
 // isExecutableMIME 拦截可执行/脚本类 MIME，防止伪装为图片上传恶意文件。
-// P1-6: 即使 magic bytes 检测出真实类型，仍需拒绝危险类型落地存储。
+// 即使 magic bytes 检测出真实类型，仍需拒绝危险类型落地存储。
 // fileName 用于扩展名兜底（net/http 的 DetectContentType 对 PE/ELF/Mach-O
 // 通常返回 application/octet-stream，无法区分可执行文件与普通二进制）。
 func isExecutableMIME(mime string, fileName string) bool {

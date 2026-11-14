@@ -49,12 +49,12 @@ class Settings(BaseSettings):
     # 避免副本间会话/限流/队列不一致；仅单机开发显式 DEGRADED_MODE=true 才允许进程内降级。
     degraded_mode: bool = False
 
-    # ── 文件后端（批 B 片 4）──
+    # ── 文件后端 ──
     # `local`（默认）：agent 文件工具直接读写 per-user workspace 本地目录 —— 单机行为不变。
     # `filestore`：经网关 `/v1/internal/storage/*` 读写部署级 FileStore（local 共享卷 / S3），
     #   多副本下"写 A 副本、读 B 副本"不再失忆。网关地址复用既有的 `gateway_internal_url`
     #   （见下方"Go 网关内部配置下发端点"），不另设一份以免两处漂移。
-    # 用**显式开关**而不是"猜部署形态"：后者不可靠且不可审计（与评审 02 §1 的同一结论）。
+    # 用**显式开关**而不是"猜部署形态"：后者不可靠且不可审计 —— 同一结论在别处已踩过一次。
     backend_kind: str = "local"
 
     # ── MCP 插件池（按节点开关）──
@@ -137,7 +137,7 @@ class Settings(BaseSettings):
     #: "提交点"）—— 流式响应一旦开始吐 chunk 就绝不重试，否则重复输出 + 重复计费。
     #: 上限刻意低：重试会放大上游压力（LiteLLM 把 `max_retries` 钉成 0 正是为此）。
     key_retry_max: int = 1
-    #: 单批内**并发**执行的工具数上限（C3）。只对"读级且无交互语义"的调用生效
+    #: 单批内**并发**执行的工具数上限。只对"读级且无交互语义"的调用生效
     #: （见 `runtime._split_tool_batch`）；写/删/外部类与审批始终串行。
     #: 设为 1 即等价于"完全串行"（回滚开关）。
     tool_concurrency_limit: int = 4
@@ -162,7 +162,7 @@ class Settings(BaseSettings):
     default_max_tokens: int = 8192
     default_temperature: float = 0.1
 
-    #: 折叠摘要是否用**模型**生成（P2-1）。
+    #: 折叠摘要是否用**模型**生成。
     #:
     #: **默认关**。摘要是"上下文被裁掉之后的补偿"，而本地提取式（每条消息首行）
     #: 已经能满足"事后看得出这段在谈什么"这个用途；模型摘要每次压缩都要多打一轮
@@ -171,11 +171,11 @@ class Settings(BaseSettings):
     #: 失败一律回落提取式。
     fold_digest_llm: bool = False
 
-    # ── 生命周期 hooks（批 G）──
-    #: 机制总开关。**默认关** —— 开启前零行为变化（方案 03 §3.2）。
+    # ── 生命周期 hooks ──
+    #: 机制总开关。**默认关** —— 开启前零行为变化。
     hooks_enabled: bool = False
     #: 是否允许**用户自定义** hook（部署级 hook 不受此开关限制）。
-    #: SaaS 部署误开必须可见：启用时启动告警 + 审计（方案 03 §3.2）。
+    #: SaaS 部署误开必须可见：启用时启动告警 + 审计。
     hooks_allow_user_defined: bool = False
     #: 单个 hook 的硬超时（秒）。超时按"失败"处理但**不阻断主流程**（fire-and-forget）。
     hooks_timeout_seconds: int = 5
@@ -206,12 +206,12 @@ class Settings(BaseSettings):
     #: 作为**独立 system 消息**注入（复用记忆注入的形态）—— 它改变"什么能影响模型输入"。
     hooks_allow_context_injection: bool = False
 
-    # ── 部署级扩展（批 H）──
+    # ── 部署级扩展 ──
     #: 机制总开关。**默认关** —— 关闭时零行为变化（与批 G 的 hooks 同一约定）。
     #: 开启后从**部署目录**读 `extensions.json`（只读、不进用户上传通道），重启生效。
     deploy_extensions_enabled: bool = False
     #: 部署目录（清单文件名固定为其中的 `extensions.json`）；清单引用的模块
-    #: 必须落在该目录内，越界一律拒绝（方案 03 §4）。
+    #: 必须落在该目录内，越界一律拒绝。
     deploy_extensions_dir: str = ""
 
     # ── run 恢复（C1 批 3）──
@@ -368,8 +368,8 @@ class Settings(BaseSettings):
     # 无外网出口）。这是 P0-1 的根治层。
     # `local`：执行走引擎进程内的基线（`app/tools/sandbox.py`）—— 仅适用于单机开发。
     #
-    # **服务不可用时失败而不是回退本地** —— 静默回退会让"隔离已生效"这个判断失真
-    # （方案 04 §4）。启动时会探测服务健康：不可达且 `degraded_mode=false`（生产默认）
+    # **服务不可用时失败而不是回退本地** —— 静默回退会让"隔离已生效"这个判断失真。
+    # 启动时会探测服务健康：不可达且 `degraded_mode=false`（生产默认）
     # ⇒ **拒绝启动**；`degraded_mode=true`（单机开发）⇒ 告警并回退本地。
     sandbox_backend: str = "service"
 
@@ -432,7 +432,7 @@ class Settings(BaseSettings):
     #: 会话内**可写**委派的上限（0 = 内置默认 3）。
     subagent_max_writers: int = 0
 
-    # ── Super-agent 看门狗（语义级进展判断，roadmap P1-3）──
+    # ── Super-agent 看门狗（语义级进展判断）──
     #
     # 与 `loop_guard`/`recovery` 的区别：它们看"这次调用是否与上次相同"、处理的是**失败**；
     # 看门狗看的是"整轮是否还在向用户的目标靠近"——每一步都换工具、都成功，也可能原地绕圈。

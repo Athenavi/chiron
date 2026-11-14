@@ -59,7 +59,7 @@ func runAffinityFromCtx(ctx context.Context) bool {
 
 // PythonClient calls the Python AI engine via HTTP SSE.
 // Supports multiple addresses with round-robin load balancing.
-// 地址表（批 E1）：由 mu 保护的动态列表——StartEngineDiscovery 每 15s 从 Redis
+// 地址表：由 mu 保护的动态列表——StartEngineDiscovery 每 15s 从 Redis
 // 引擎注册表刷新（动态优先）；注册表为空/Redis 不可用时回退 staticAddrs
 // （PYTHON_ENGINE_ADDRESS 构造值），扩容缩容无需手工改配置。
 type PythonClient struct {
@@ -202,7 +202,7 @@ func (c *PythonClient) HealthCheck(ctx context.Context) map[string]interface{} {
 
 // SetInternalToken 配置 Go↔Python 共享内部 token。
 // 转发到 Python 的请求会自动注入 X-Internal-Token header，
-// Python 侧据此校验 ?tenant_id= 透传身份的合法性（P0-3 防伪造）。
+// Python 侧据此校验 ?tenant_id= 透传身份的合法性。
 func (c *PythonClient) SetInternalToken(token string) {
 	c.internalToken = token
 }

@@ -269,7 +269,7 @@ class LocalWorkspaceBackend:
         `total_lines` 对大文件返回 `-1`（未知）：调用方（`read_file`）据此把
         提示写成"文件很大，未统计行数"，而不是给出一个**错误的具体数字**。
 
-        **行数缓存（P1-2）**：`total_lines` 要扫完全文才数得出来，而调用方每翻一页
+        **行数缓存**：`total_lines` 要扫完全文才数得出来，而调用方每翻一页
         都要问一次 —— 读 10 页就是 10 次全文扫描。缓存的 key 用 `(st_size, st_mtime_ns)`
         校验，文件一改就自然失效；命中时改走 :func:`_read_window_only`，只读到窗口末尾。
         """

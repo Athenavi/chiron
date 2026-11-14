@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// roadmap §6 问题 4 的 enforce：事件驱动回合默认降级到 `ask`。
+// 问题 4 的 enforce：事件驱动回合默认降级到 `ask`。
 //
 // 这一组断言要证明的不是"字段被赋值了"，而是**裁决结果真的变了** ——
 // 所以每个用例都从 `explicit` 一路走到 `RequiresConfirmation`，只看 map 里是不是

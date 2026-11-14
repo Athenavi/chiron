@@ -13,7 +13,7 @@ import (
 	"github.com/athenavi/chiron/internal/db"
 )
 
-// billing_packages_handler.go —— 套餐目录的后台管理端（P2-2c）。
+// billing_packages_handler.go —— 套餐目录的后台管理端。
 //
 // 为什么要这一层：P2-2 只做到「能买到」，`billing_packages` 里有什么只能手工
 // INSERT。运营改一次价格要连数据库，而价格直接影响真实收款 —— 这是最容易
@@ -339,7 +339,7 @@ type packageModelResult struct {
 //
 // **不复用 validateAllowedModels**：那个函数查的是 `admin_model_configs.model_id`，
 // 而真库该表实测 0 行、`llm_models` 40 行、两者零交集。拿它校验会把所有合法
-// 模型名都判成非法（P2-2b 已在 `ResolveAllowedModels` 上踩过同一个坑）。
+// 模型名都判成非法。
 // 套餐权益最终是拿 `llm_models.name` 去和请求体里的 model 比对，所以这里也必须
 // 以 `llm_models.name` 为准，两边口径才会一致。
 func normalizePackageModels(ctx context.Context, raw []string) (*packageModelResult, error) {
@@ -374,7 +374,7 @@ func normalizePackageModels(ctx context.Context, raw []string) (*packageModelRes
 // packageModelNameSet 返回 `llm_models.name` 全集。
 //
 // 刻意不限 enabled：模型被临时停用后，套餐里已有的权益不该因此变得"编辑不了"。
-// 真正的可用性判定发生在请求时刻（P2-2b 的 EffectiveModelSet）。
+// 真正的可用性判定发生在请求时刻。
 func packageModelNameSet(ctx context.Context) (map[string]bool, error) {
 	pool := db.ReadPool()
 	if pool == nil {

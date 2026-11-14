@@ -3,7 +3,7 @@ import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import SubAgentPanel from '../SubAgentPanel.vue'
 
 /**
- * 子 Agent 面板的审批链路（P3-后续）。
+ * 子 Agent 面板的审批链路。
  *
  * 这条链路此前**根本不存在**：引擎只把 approval 转成一行 notice，前端没有任何控件，
  * 用户唯一能做的是看着子 Agent 空转 300 秒后失败。这里钉住三件事：

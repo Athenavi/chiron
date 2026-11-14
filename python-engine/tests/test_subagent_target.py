@@ -1,6 +1,6 @@
-"""S1：compiled 子 agent（target 协议 + 白名单注册表，方案 01 §4.1）。
+"""S1：compiled 子 agent（target 协议 + 白名单注册表，）。
 
-对齐方案 §4.1 的约定：
+的约定：
 ① `target="profile:<id>"` 与 `profile=<id>` 走**同一条**子会话路径；
 ② 只有**内置**目标 —— 注册表（`BUILTIN_TARGET_PREFIXES` + 显式 `builtin` 闸门）不接受
    白名单外前缀，仓库里也不存在"用户上传可调用对象"的入口；

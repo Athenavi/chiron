@@ -23,7 +23,7 @@ func NewSkillHandler(python *engine.PythonClient) *SkillHandler {
 
 var validSkillName = regexp.MustCompile(`^[a-zA-Z0-9_.-]+$`)
 
-// RegisterRoutes 注册技能路由。安全修复（P0-S2）：所有路由必须经过 authMW
+// RegisterRoutes 注册技能路由。安全修复：所有路由必须经过 authMW
 // （技能即代码，未认证可 install/run = 未认证 RCE），并挂 rlMW 与 sanitizeMW。
 func (h *SkillHandler) RegisterRoutes(mux *http.ServeMux, authMW, rlMW, sanitizeMW routeMiddleware) {
 	// 同时注册精确和尾斜杠变体：Go ServeMux 中 "/v1/skills/" 只匹配子树（不匹配 "/v1/skills"），

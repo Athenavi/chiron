@@ -204,7 +204,7 @@ func fetchProviderModels(ctx context.Context, base, apiKey string) ([]string, er
 // 现在的口径：
 //   - **已存在的行原样留着** —— 连 `enabled` 都不在 SELECT/UPDATE 里出现，从代码上保证翻不动；
 //   - 只新建「新发现的」、只删除「这次没再发现的」；
-//   - 窗口只在"之前不知道（<=0）"时推断补一次，**不覆盖**已有值（P1-f 的原口径）。
+//   - 窗口只在"之前不知道（<=0）"时推断补一次，**不覆盖**已有值。
 //
 // 抽成纯函数 `planModelSync` 是为了**能单测**：本仓不能假设测试环境有真 PostgreSQL
 // （DB 相关用例靠 `*_live_test.go` 的 env gating），所以决策必须与执行分离。
@@ -429,7 +429,7 @@ func ListModelsForUser(w http.ResponseWriter, r *http.Request) {
 	OK(w, map[string]interface{}{"models": out})
 }
 
-// effectiveModelSetForRequest 取当前请求的可用模型集合（P2-2b）。
+// effectiveModelSetForRequest 取当前请求的可用模型集合。
 //
 // 为什么不直接用 ResolveAllowedModels：它在"不限制"时要返回一份全量清单，
 // 实现查的是 admin_model_configs.model_id —— 该表可以为空，而 /v1/models 的

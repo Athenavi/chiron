@@ -26,7 +26,7 @@ func registerPublicEndpoints(
 	mux.Handle("GET /search", authMW(rlMW(http.HandlerFunc(searchHandler.Search))))
 	mux.Handle("GET /v1/search", authMW(rlMW(http.HandlerFunc(searchHandler.Search))))
 
-	// 租户/用户级 harness 配置（P1-④ 批 B）：**写自己**，鉴权只需 authMW
+	// 租户/用户级 harness 配置：**写自己**，鉴权只需 authMW
 	// （`user_id` 取自 claims，请求体里的同名字段一律忽略）。
 	// 租户级那三条在 routes_admin.go（另挂 PermPolicyManage）。
 	harnessHandler := NewHarnessProfileHandler(pgEntStore{}, notifyHarnessProfileChanged)

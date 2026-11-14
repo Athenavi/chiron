@@ -91,7 +91,7 @@ async def edit_file(
             "max_bytes": EDIT_FILE_MAX_BYTES,
         }
 
-    # 批 B：读**全文原文**经后端（`limit=0` 的语义见 `ReadResult` 的文档）——
+    # 读**全文原文**经后端（`limit=0` 的语义见 `ReadResult` 的文档）——
     # 这里不能用默认分页：唯一性校验与 diff 都要求完整且逐字节精确的内容。
     read = await backend.read(path, limit=0)
     if read.error:
@@ -162,7 +162,7 @@ async def edit_file(
     from app.tools.context import get_session_id
 
     undo_note = await undo_stack.snapshot_before_write(get_session_id(), target, "edit_file")
-    # 批 B：写入经后端（默认 = 本地工作区）
+    # 写入经后端（默认 = 本地工作区）
     written = await backend.write(path, modified)
     if written.error:
         return {"error": written.error}

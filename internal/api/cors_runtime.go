@@ -5,7 +5,7 @@ import (
 	"sync/atomic"
 )
 
-// ── CORS 白名单运行时共享源（批 B-2′）──
+// ── CORS 白名单运行时共享源──
 //
 // 背景：CORSMiddleware / checkWebSocketOrigin / billing.firstOrigin 之前各自读取
 // 构造期快照（cfg.CORSOrigins 或 os.Getenv("CORS_ORIGINS")），后台「系统设置」保存

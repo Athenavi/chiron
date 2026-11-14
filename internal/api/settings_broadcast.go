@@ -11,7 +11,7 @@ import (
 	"github.com/athenavi/chiron/internal/storage"
 )
 
-// ── 系统设置变更跨副本广播（批 B-2′）──
+// ── 系统设置变更跨副本广播──
 //
 // 背景：后台「系统设置」保存到 DB 后，只有收到保存请求的那个网关副本会立即生效
 // （rate_limit 热更、redis 热换），其它副本沿用启动快照，造成多副本配置不一致。

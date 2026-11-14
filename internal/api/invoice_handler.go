@@ -18,7 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// invoice_handler.go —— 工单式发票申请（roadmap §11.4 / B2）。
+// invoice_handler.go —— 工单式发票申请。
 //
 // 现状（已核实）：`payments` 表早已存在且状态机完整（pending/paid/failed），
 // 但全仓**没有任何开票实现** —— 用户要报销只能找人工。这个 handler 补的是
@@ -89,7 +89,7 @@ func NewInvoiceHandler() *InvoiceHandler {
 	return &InvoiceHandler{store: db.GlobalDBManager}
 }
 
-// SetNotifier 装配通知中心：审核结果要通知申请人本人（P1-8）。
+// SetNotifier 装配通知中心：审核结果要通知申请人本人。
 //
 // 与 AuthHandler.SetNotifier 同款收窄接口：这里只需要"写一条通知"，
 // 不需要读列表或管邮件偏好。
@@ -679,7 +679,7 @@ func (h *InvoiceHandler) Review(w http.ResponseWriter, r *http.Request) {
 	OK(w, map[string]interface{}{"id": invoiceID, "status": status})
 }
 
-// notifyReviewResult 通知发票申请人审核结果（P1-8）。
+// notifyReviewResult 通知发票申请人审核结果。
 //
 // 为什么在这里重新查一次发票：审核 UPDATE 只带了 id/status，而通知正文需要
 // 金额与申请人 user_id。用一条 SELECT 补齐比给 UPDATE 加 RETURNING 更稳 ——
@@ -741,7 +741,7 @@ func centsToYuanString(cents int64) string {
 	return fmt.Sprintf("%s%d.%02d", sign, cents/100, cents%100)
 }
 
-// ── 导出（P1-8）──
+// ── 导出──
 
 // invoiceExportHeader 是发票导出的表头。
 //

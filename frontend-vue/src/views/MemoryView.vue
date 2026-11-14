@@ -289,7 +289,7 @@ async function runOrganize() {
   }
 }
 
-// ── 项目（C3）──
+// ── 项目──
 // 记忆按 `tenant + user + project` 隔离，**空 = 未分组**。切换项目必须**重新加载**：
 // 否则界面上留着上一个项目的条目，用户会以为它们还在（"隔离"看起来生效而其实串了）。
 const project = currentProject

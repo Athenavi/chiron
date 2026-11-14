@@ -176,7 +176,7 @@ async def test_local_backend_reports_truncation_itself(tmp_path: Path, monkeypat
 
 @pytest.mark.asyncio
 async def test_local_backend_reuses_line_count_across_pages(tmp_path: Path, monkeypatch):
-    """P1-2：翻页复用行数缓存，第二页起不再扫全文重数。
+    """翻页复用行数缓存，第二页起不再扫全文重数。
 
     数总行必须扫完整个文件，而调用方每翻一页都要问一次 —— 读 10 页就是 10 次全文
     扫描。这里用"把全文扫描函数换掉"来证明第二页**没有**再走它：若缓存失效，这个
@@ -477,7 +477,7 @@ async def test_filestore_backend_write_read_round_trip():
 
 @pytest.mark.asyncio
 async def test_filestore_backend_missing_file_is_an_error_not_empty():
-    """方案 02 §3.4 的完成标准：必须区分"没有这个文件"与"文件是空的"。"""
+    """ 的完成标准：必须区分"没有这个文件"与"文件是空的"。"""
     backend, _ = _filestore_with_fake_gateway()
 
     read = await backend.read("nope.md", limit=0)

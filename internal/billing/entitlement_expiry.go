@@ -30,7 +30,7 @@ type ExpiryScanResult struct {
 	Notified int
 }
 
-// ScanEntitlementExpiry 扫描即将到期的权益并发出到期预警（P2-3）。
+// ScanEntitlementExpiry 扫描即将到期的权益并发出到期预警。
 //
 // **只发通知，不改任何状态**。权益是否生效完全由 `starts_at/expires_at` 与当前
 // 时间比较决定（见 ActiveEntitlements 的注释），没有 status 列需要维护 ——

@@ -170,7 +170,7 @@ async def _workbench_binding(body: AgentDispatchRequest, gateway: Any) -> str:
 class AgentApprovalRequest(BaseModel):
     """工具审批决策请求（Go 网关 /v1/agent/approval 转发而来）。
 
-    **兼容两种形态**（C5）：
+    **兼容两种形态**：
     * 旧（已发布前端）：只发 `approved: bool`；
     * 新：发 `decision: approve|reject|edit`，`edit` 时 `arguments` 必填。
 

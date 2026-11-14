@@ -129,7 +129,7 @@ func TestFormatTransactionRecord_KeepsAmountsNumeric(t *testing.T) {
 
 // TestFormatTransactionRecord_TimeIsUTCAndTurnIDMayBeEmpty 验证时区与空轮次。
 //
-// created_at 是无时区的 timestamp（roadmap §10.2 / D 组 L4-3）。统一按 UTC
+// created_at 是无时区的 timestamp。统一按 UTC
 // 输出并在表头注明，否则跨时区对账会差几个小时而用户毫无线索。
 func TestFormatTransactionRecord_TimeIsUTCAndTurnIDMayBeEmpty(t *testing.T) {
 	shanghai := time.FixedZone("CST", 8*3600)
@@ -279,7 +279,7 @@ func TestCheckExportRowLimit_ErrorCarriesCount(t *testing.T) {
 // 同时两条查询都必须排除 free_chat，否则"页面上 50 条"与"导出的内容"
 // 会对不上 —— 而两边其实都没错。
 //
-// 断言字符串而不是跑真库：仓库没有 live DB 测试环境（见 roadmap §8.1），
+// 断言字符串而不是跑真库：仓库没有 live DB 测试环境，
 // 但有人改这两条 SQL 时，这条测试会立刻失败。
 func TestExportQueries_AreScopedToOneUserAndExcludeFreeChat(t *testing.T) {
 	for name, query := range map[string]string{

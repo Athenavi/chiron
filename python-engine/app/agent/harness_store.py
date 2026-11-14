@@ -1,4 +1,4 @@
-"""租户/用户级 harness 配置的读取（P1-④）—— **deepagents 没有这一层**。
+"""租户/用户级 harness 配置的读取—— **deepagents 没有这一层**。
 
 deepagents 的 harness profile 是**部署级**注册（`register_harness_profile`，进程启动时决定）。
 Chiron 把它下沉到租户级 / 用户级：同一条稳定前缀，租户可以追加自己的行为塑形，

@@ -480,7 +480,7 @@ async def _persist_terminal_to_cache(
 ) -> None:
     """把终态写进运行期缓存：run Hash **与整树骨架**。
 
-    为什么必须抽成一个函数（P1-3）：终态在缓存里有**两个**面 ——
+    为什么必须抽成一个函数：终态在缓存里有**两个**面 ——
     ``subagent:{tenant}:run:{id}``（详情）与 ``subagent:{tenant}:tree:{session}``（整树骨架，
     即 ``GET /v1/subagent/runs`` 的数据源）。此前正常收尾写了两者，而**取消收尾只写了前者**，
     于是被取消的 run 在侧边栏/树里一直停在 ``running``：前端永久转圈的来源之一。
@@ -596,7 +596,7 @@ class SubAgentRunner:
         #: S4：调用方声明的响应 schema（JSON Schema）。非空时会在收尾阶段抽取结构化结果。
         self._response_schema = response_schema if isinstance(response_schema, dict) else None
         #: S2：是否继承父会话上下文（`False` 默认关 / `True` 全部 / `int` 最近 N 条）。
-        #: 默认关是**安全默认** —— 继承会扩大子 Agent 的可见面（评审 01 §1.9）。
+        #: 默认关是**安全默认** —— 继承会扩大子 Agent 的可见面。
         self._inherit_context: bool | int = inherit_context
         #: S2：父会话消息（由调用方提供；`None` 表示没有可继承的上下文）
         self._parent_messages = parent_messages
@@ -638,7 +638,7 @@ class SubAgentRunner:
         span_id, dispatch_span_id = _delegation_span_ids(parent_trace_id, run_id)
         _span_started = time.time()
 
-        # A5（方案 04 §3）：生命周期遥测的**起点**。`rerun_of` 非空 ⇒ 这次是"恢复/重跑"而不是
+        # A5：生命周期遥测的**起点**。`rerun_of` 非空 ⇒ 这次是"恢复/重跑"而不是
         # 新派发 —— 两者在诊断上必须能分开（参照 Reasonix 的 `child_resume`）。
         # 遥测是**旁路**：没有注册 sink 时零开销，sink 出错也不会影响这次委派。
         emit_lifecycle(
@@ -849,7 +849,7 @@ class SubAgentRunner:
                                   parent_run_id=parent_run_id, depth=child_depth,
                                   profile=profile_name, task=task)
 
-        # ── 作业归属（P4-1）：把"哪个实例持有这个 run"写进 Redis ──
+        # ── 作业归属：把"哪个实例持有这个 run"写进 Redis ──
         #
         # 为什么必须有它：后台 run 的任务活在**本进程**里，而网关没有 run → 实例的映射，
         # 取消只能靠一条广播。实例重启/被驱逐后广播无人认领，网关却仍返回 accepted ——
@@ -1294,7 +1294,7 @@ class SubAgentRunner:
             profile=profile_name,
         )
 
-        # 注销作业归属：run 已收尾，网关不该再认为本实例持有它（P4-1）。
+        # 注销作业归属：run 已收尾，网关不该再认为本实例持有它。
         # 放在终态写入之后：先让"结论"可见，再撤掉"我还在跑"的声明。
         if owner_lease is not None:
             await owner_lease.stop()

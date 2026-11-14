@@ -203,7 +203,7 @@ var (
 	PermPolicyManage = "policy:manage"
 	PermMarketManage = "market:manage"
 	PermSSOManage    = "sso:manage"
-	// PermBillingManage 套餐目录管理（P2-2c）。
+	// PermBillingManage 套餐目录管理。
 	//
 	// 单独一个权限点而不是复用 PermAdminWrite：套餐价格与所含权益直接决定
 	// 平台收多少钱、卖什么货，属"定价"而非"日常运维"。目前授予 owner/admin

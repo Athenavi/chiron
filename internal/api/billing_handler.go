@@ -270,7 +270,7 @@ var usageGroupByWhitelist = map[string]bool{
 
 
 
-// ── 套餐与权益（P2-2）─────────────────────────────────────────────────
+// ── 套餐与权益─────────────────────────────────────────────────
 
 // GetPackages 列出已上架套餐，供充值页展示"可购买的套餐"。
 func (h *BillingHandler) GetPackages(w http.ResponseWriter, r *http.Request) {

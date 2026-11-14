@@ -29,7 +29,7 @@ const (
 )
 
 // InternalStorageHandler 把网关侧的 FileStore（local 共享卷 / S3）暴露给引擎的
-// agent 文件工具（方案 02 §3.4）。
+// agent 文件工具。
 //
 // 为什么需要它：agent 的文件工具此前只认本地 `workspace_dir()`，多副本部署下
 // "写 A 副本、读 B 副本"会间歇性失忆（python-engine/app/tools/sandbox.py 的注释已自陈）。

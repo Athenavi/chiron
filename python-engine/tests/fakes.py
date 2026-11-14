@@ -110,7 +110,7 @@ class InMemorySummaryStore:
 
 
 def _project_of(entry: object) -> str:
-    """条目的项目维（C3）：旧测试数据可能没有该属性 → 视为"未分组"。"""
+    """条目的项目维：旧测试数据可能没有该属性 → 视为"未分组"。"""
     return str(getattr(entry, "project", "") or "")
 
 

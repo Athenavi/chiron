@@ -11,7 +11,7 @@ import (
 	"github.com/athenavi/chiron/internal/db"
 )
 
-// ── 权限判定的读路径（C1-4 / roadmap §12.4 第 4 步）──
+// ── 权限判定的读路径──
 //
 // ## 为什么要切
 //

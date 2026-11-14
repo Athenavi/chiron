@@ -1,4 +1,4 @@
-"""按**模型家族**的 harness 塑形（B1，方案 04 §3）。
+"""按**模型家族**的 harness 塑形（B1，）。
 
 ## 为什么需要它
 
@@ -14,7 +14,7 @@ spec 注册**（不是按 provider 前缀）—— 这样"没注册的模型"行
 
 1. **未注册的模型逐字不变**：`apply_harness_suffix` 没匹配到 profile 时**原样返回**输入。
    这是本模块最重要的性质 —— 引入这个机制不该悄悄改变任何现有模型的输出。
-2. **注册表默认为空**：机制就绪，但"给哪个模型加什么 suffix"是产品决定（见方案 04 §8 未决问题）。
+2. **注册表默认为空**：机制就绪，但"给哪个模型加什么 suffix"是产品决定（见 未决问题）。
    空注册表下 `apply_harness_suffix` 是恒等函数。
 
 ## 与 A1 的关系（值得记一笔）
@@ -46,7 +46,7 @@ class HarnessProfile:
     #: mode persona 之上，而不会被打断。
     system_prompt_suffix: str = ""
     #: 模型特有的参数覆盖（如 temperature / tool_choice）。形状先定下来：**当前未接线**
-    #: —— 参数真正生效需要在 provider 装配处应用，属后续工作（方案 04 §8 未决）。
+    #: —— 参数真正生效需要在 provider 装配处应用，属后续工作。
     params: Mapping[str, Any] = field(default_factory=lambda: MappingProxyType({}))
 
 

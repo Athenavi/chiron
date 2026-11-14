@@ -8,7 +8,7 @@ import (
 	"github.com/athenavi/chiron/internal/db"
 )
 
-// 事件驱动回合的工具授权降级（roadmap §6 问题 4 的 enforce 落点）。
+// 事件驱动回合的工具授权降级。
 //
 // 已决口径：**事件驱动出的回合默认降级到 `ask`**。理由是信任边界 —— 子 Agent 回投、
 // 后台命令终态、接管巡检都不是人当场授权的，而它们的正文完全可能被外部内容影响
@@ -23,7 +23,7 @@ import (
 
 // userToolsModeOverrideKey 是 `users.settings` 里允许用户**显式放宽**事件驱动回合的键。
 //
-// 显式开关而不是推断：roadmap 明确要求"用户若要放宽，走显式开关，不靠事件来源看起来
+// 显式开关而不是推断：明确要求"用户若要放宽，走显式开关，不靠事件来源看起来
 // 可信来推断"。缺省不存在 = 不放宽。
 const userToolsModeOverrideKey = "event_driven_tools_mode"
 

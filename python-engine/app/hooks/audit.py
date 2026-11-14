@@ -1,4 +1,4 @@
-"""批 G hook 执行的审计落盘（方案 03 §3.2）。
+"""批 G hook 执行的审计落盘。
 
 每次执行记一条 JSONL：**谁、哪个租户、哪个事件、耗时、退出码、是否阻断**。
 与 `app/tools/exec_audit.py`、plugin audit **同构**（JSONL + `logs/` + 失败不阻断）。

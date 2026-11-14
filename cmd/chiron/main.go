@@ -218,7 +218,7 @@ func main() {
 				return
 			}
 			api.StartCronScheduler(lifecycleCtx, pythonClient)
-			// 批 E1：引擎 Redis 动态发现——注册表非空则动态优先，为空/Redis 不可用回退静态地址
+			// 引擎 Redis 动态发现——注册表非空则动态优先，为空/Redis 不可用回退静态地址
 			if db.Redis != nil {
 				engine.StartEngineDiscovery(lifecycleCtx, db.Redis, pythonClient)
 			}
@@ -229,7 +229,7 @@ func main() {
 	}
 
 	// ── RPA Browser Hub ──
-	// 传入 db.Redis 以启用跨网关副本桥接（批 D）;Redis 不可用时自动退回单机模式。
+	// 传入 db.Redis 以启用跨网关副本桥接;Redis 不可用时自动退回单机模式。
 	rpaHub := api.NewRPAHub(db.Redis)
 
 	// ── Storage / Session Manager / HTTP ──
@@ -275,7 +275,7 @@ func main() {
 	// 会话地图：周期对账（删掉指向已删会话的节点）—— 事件驱动的失效兜不住"别的实例删的会话"
 	api.StartSessionMapReconciler(lifecycleCtx)
 
-	// P1-1: 启动数据库连接池自动调优（每5分钟检查一次）
+	// 启动数据库连接池自动调优（每5分钟检查一次）
 	if db.GlobalDBManager != nil {
 		db.GlobalDBManager.SetTuneInterval(5 * time.Minute)
 		db.GlobalDBManager.StartAutoTuner(lifecycleCtx)

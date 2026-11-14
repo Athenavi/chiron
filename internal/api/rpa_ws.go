@@ -94,7 +94,7 @@ func (c *RPAClient) SendMessage(msg RPAMessage) error {
 	return c.Conn.WriteJSON(msg)
 }
 
-// ── RPA 跨实例桥接（批 D：多网关副本）──
+// ── RPA 跨实例桥接（多网关副本）──
 //
 // 背景：clients/pending 均为进程内注册表。多实例部署时，浏览器插件 WebSocket
 // 可能落在网关副本 A，而 python engine 的 POST /v1/rpa/exec 经负载均衡落到

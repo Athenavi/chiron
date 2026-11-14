@@ -331,7 +331,7 @@ services:
       KEY_RETRY_MAX: ${KEY_RETRY_MAX:-}
       # K8s 注入实例标识;compose 下留空由引擎自生成
       INSTANCE_ID: ${INSTANCE_ID:-}
-      # 引擎对外可达地址(批 E1):设置后引擎向 Redis 自注册,网关据此把某个 session 的
+      # 引擎对外可达地址:设置后引擎向 Redis 自注册,网关据此把某个 session 的
       # 请求(审批/取消)路由到持有该 run 的实例,避免扩容/重启后漂移。留空=不注册,
       # 会话亲和退化为一致性哈希(见 docs/deployment-multi-instance.md 第 4.5 条)。
       ENGINE_ADVERTISE_URL: ${ENGINE_ADVERTISE_URL:-}
@@ -363,7 +363,7 @@ services:
     # （被截断的 in-flight 任务退化为等 PEL 重投，可能重复执行）。
     stop_grace_period: 60s
     restart: unless-stopped
-    # 沙箱加固（P0-1）：引擎容器内会执行 agent 生成的命令与 Python 代码，而进程内
+    # 沙箱加固：引擎容器内会执行 agent 生成的命令与 Python 代码，而进程内
     # 沙箱（python-engine/app/tools/sandbox.py）只是"提高门槛"，**不是安全边界**。
     # 这里做容器级兜底：丢弃全部 capability、禁止提权、限制进程数 —— 使逃逸后既
     # 无法提权，也无法用 fork 炸弹拖垮宿主。彻底隔离需独立沙箱容器 / gVisor，

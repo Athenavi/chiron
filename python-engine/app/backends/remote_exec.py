@@ -51,7 +51,7 @@ from app.tools.context import get_session_id, get_tenant_id, get_user_id
 
 logger = logging.getLogger(__name__)
 
-#: 与既有 `/v1/internal/*` 同构（设计稿 §2）：形状不另发明一套。
+#: 与既有 `/v1/internal/*` 同构：形状不另发明一套。
 SERVICE_RUN_PATH = "/v1/internal/exec/run"
 SERVICE_HEALTH_PATH = "/v1/internal/exec/health"
 
@@ -67,7 +67,7 @@ class RemoteExecBackend:
     1. `url` 非空；
     2. `tenants` 为空或含 `*`（⇒ **全部租户**，默认），或当前租户在白名单里。
 
-    空白名单 = **全部租户走服务**（P0-1：沙箱隔离是默认行为）。要豁免个别租户，
+    空白名单 = **全部租户走服务**。要豁免个别租户，
     用白名单列出租户；要整体退回进程内执行，用 `SANDBOX_BACKEND=local`。
     """
 
@@ -97,7 +97,7 @@ class RemoteExecBackend:
     def should_use_service(self, *, tenant: str | None = None) -> bool:
         """本次执行该不该走服务。`tenant` 显式传入便于测试；缺省取当前上下文租户。
 
-        分流规则（P0-1 默认启用）：
+        分流规则：
         * `tenants` 为空 ⇒ **全部租户走服务**（默认；沙箱隔离是默认行为）；
         * `tenants` 含 `*` ⇒ 同上（显式写法，便于"名单里写 `*` 再排除若干"）；
         * 否则只有名单内的租户走服务（灰度 / 豁免用）。

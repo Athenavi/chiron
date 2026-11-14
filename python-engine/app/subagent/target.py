@@ -1,4 +1,4 @@
-"""S1：compiled 子 agent 的"目标协议"（进程内可委派目标，方案 01 §4.1）。
+"""S1：compiled 子 agent 的"目标协议"（进程内可委派目标，）。
 
 deepagents 用 ``CompiledSubAgent``（LangGraph runnable）表达"除了 Profile，还能把别的
 可执行单元当子 agent 跑"。Chiron **不引 LangGraph**（决策 D1），改用 Python ``Protocol``

@@ -19,7 +19,7 @@ import { computed, nextTick, ref, watch } from 'vue'
 const props = defineProps<{
   open: boolean
   title: string
-  /** 面板宽度（px）。统计 320 / 子 Agent 420（设计稿第三节） */
+  /** 面板宽度（px）。统计 320 / 子 Agent 420 */
   width?: number
   /** 底部预留高度（输入区 + 状态栏）—— 浮层最高只能长到这里 */
   bottomInset?: number
@@ -162,7 +162,7 @@ watch(
   }
 }
 
-/* 移动端（≤768px）：降级为**底部抽屉**（设计稿第五节）——
+/* 移动端（≤768px）：降级为**底部抽屉**——
    贴上/左/右三边、圆角只在顶部，并覆盖内联的 width / maxHeight。 */
 @media (max-width: 768px) {
   .fp {

@@ -1,6 +1,6 @@
 package api
 
-// 批 B-3′：实时通道统一为 SSE。
+// 实时通道统一为 SSE。
 // 原 GET /ws/{sessionId} 与 WebSocketHub 已下线（Vue 前端仅使用 EventSource；
 // SSE 链路经 broadcast.Hub 的 Redis Stream + Pub/Sub 实现跨网关副本一致，并支持
 // Last-Event-ID 断线重放）。本文件仅保留 RPA 插件 WebSocket（/ws/rpa）与

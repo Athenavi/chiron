@@ -9,7 +9,7 @@ import (
 	"github.com/athenavi/chiron/internal/db"
 )
 
-// STEP 引导漏斗（P0-3 的「完成率可查」验收）。
+// STEP 引导漏斗。
 //
 // ## 为什么要单独一个端点
 //

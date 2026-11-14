@@ -149,7 +149,7 @@ def _with_builtin_source(
 
     对位 deepagents 的 `built_in_skills`（方案 02 D3）。`search` 高优先级在前，而
     `_iter_search` 是 first-wins，因此**用户同名技能覆盖内置** —— 等价于 deepagents
-    的 last-wins（其加载顺序是 built_in 先、用户后），见评审 01 §2.5。
+    的 last-wins（其加载顺序是 built_in 先、用户后）。
 
     内置目录缺失时静默跳过：只是「没有内置技能」，不该让技能列表报错。
     """

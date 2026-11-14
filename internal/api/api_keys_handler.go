@@ -19,7 +19,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// api_keys_handler.go —— 用户级 API Key 自助（roadmap §11.3 / P1-3）。
+// api_keys_handler.go —— 用户级 API Key 自助。
 //
 // 背景（已核实）：`api_keys` 表早已存在，且**已经在鉴权链路里**（`middleware.go`
 // 用 `X-API-Key` → sha256 → JOIN users 校验 revoked/expires_at/tenant_id）。但全仓

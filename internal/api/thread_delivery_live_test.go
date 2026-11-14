@@ -11,7 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// P1-1 投递层队列侧的验收（roadmap P1-1.1 投递路径第 3、4 步的下半段）。
+// P1-1 投递层队列侧的验收。
 //
 // 这一层有三件事只有跑一次才知道真假：
 //   - `FOR UPDATE SKIP LOCKED` 写在 UPDATE … WHERE (…) = (SELECT …) 这种形态里到底
@@ -327,7 +327,7 @@ func TestLiveEnqueueThreadDeliveryDropsOnOverflow(t *testing.T) {
 
 // TestLiveEnqueueThreadDeliveryRejectsUnknownSource 验未注册来源直接报错。
 //
-// `webhook` 刻意不在 `followupKinds` 里（P0-2 只接内部可信源），所以它必须炸，
+// `webhook` 刻意不在 `followupKinds` 里，所以它必须炸，
 // 而不是悄悄按某个默认分组入队 —— 那等于绕过信任边界。
 func TestLiveEnqueueThreadDeliveryRejectsUnknownSource(t *testing.T) {
 	pool := withP12Pool(t)

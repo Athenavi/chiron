@@ -148,7 +148,7 @@ SHARED_CONSTANTS: tuple[tuple[str, str, str, str, str], ...] = (
     ),
     (
         # harness suffix 的长度上限：Go 侧校验写入、Python 侧读取时兜底截断，
-        # 两侧不一致等于"上限形同虚设"（P1-④ 批 B）
+        # 两侧不一致等于"上限形同虚设"
         "MaxHarnessSuffixChars",
         "2000",
         "internal/api/harness_profiles.go",

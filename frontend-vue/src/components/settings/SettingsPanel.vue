@@ -788,7 +788,7 @@ onUnmounted(() => {
       </div>
     </a-tab-pane>
 
-    <!-- ── 行为塑形（P1-④ 批 B）：会被追加到 system prompt 末尾，必须显著告知 ── -->
+    <!-- ── 行为塑形：会被追加到 system prompt 末尾，必须显著告知 ── -->
     <a-tab-pane
       key="harness"
       :tab="$t('settings.harness_title')"

@@ -9,7 +9,7 @@ import (
 	"github.com/athenavi/chiron/internal/auth"
 )
 
-// billing_packages_handler_test.go —— 套餐目录管理端的纯校验与挂载测试（P2-2c）。
+// billing_packages_handler_test.go —— 套餐目录管理端的纯校验与挂载测试。
 //
 // 只覆盖不需要数据库的部分：`buildPackage` 在 `allowed_models` 为空时不会查
 // `llm_models`（空清单 = 不限制模型，本就有意义），因此可在无库环境下完整测

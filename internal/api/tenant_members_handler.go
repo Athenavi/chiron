@@ -14,7 +14,7 @@ import (
 	"github.com/athenavi/chiron/internal/id"
 )
 
-// ── 团队与成员（C1 / roadmap §12.4）──
+// ── 团队与成员──
 //
 // ## 口径（产品 2026-10-29 答复）
 //
@@ -35,7 +35,7 @@ import (
 // ## 两套角色真相的处置
 //
 // `ent_user_roles`（旧 RBAC）与 `tenant_members.role_id`（新）目前并存。在读取
-// 路径尚未切换之前（C1-4），若移除成员时不清 `ent_user_roles`，该用户仍会通过
+// 路径尚未切换之前，若移除成员时不清 `ent_user_roles`，该用户仍会通过
 // `LoadEffectivePerms` 拿回权限 —— 移除就成了假的。因此移除时一并清理。
 
 var (
