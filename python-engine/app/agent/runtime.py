@@ -288,7 +288,9 @@ def _render_plan_block(todos: list[dict[str, Any]]) -> str:
     * tool_result 会被压缩裁掉（`compaction._prune_messages` 对 tool 消息做截断，
       更旧的整段淘汰），**计划是长任务里唯一"不能被裁"的东西** —— 裁掉之后模型
       就真的忘了自己在干什么，然后在剩下的轮次里从头重做。
-    * 尾部提醒在**压缩之后**才拼上（见循环里的 `_with_tail_reminder`），所以它天然
+    * 尾部提醒在**压缩与孤立 tool 清理之后**才拼上（见循环里的
+      `_goal_ctx.render(plan_block)` 与 `_chat_stream_with_retry(tail_reminder=...)`），
+      所以它天然
       不在任何压缩路径的作用范围内，不必给压缩器开后门。
     * 它**不进 system 段**：system 段每轮变一次，前缀缓存就从那条消息起整段失效；
       放在消息尾部，稳定前缀逐字不变，缓存照常命中。
@@ -2282,15 +2284,30 @@ class AgentRuntime:
             # 取不到（旧网关 / 直连引擎）时为 0 ⇒ cost 轴不触发，行为与 M24 之前一致。
             self._cost_per_1k_in = float(llm_config.get("cost_per_1k_input") or 0.0)
             self._cost_per_1k_out = float(llm_config.get("cost_per_1k_output") or 0.0)
+            # 缓存输入单价。网关未下发（旧网关 / 直连引擎）时回落标准输入价 ——
+            # 与 internal/billing 的 tokenCost 同一口径（那边 `LLMCostPerCached<=0`
+            # 时也回落 LLMCostPerToken），两处必须一致，否则预算闸门拦的数
+            # 与用户被扣的钱不是同一笔。
+            self._cost_per_1k_cached = float(
+                llm_config.get("cost_per_1k_cached") or self._cost_per_1k_in
+            )
 
             def _cost_spent() -> float:
                 """本 run 全程的**估算成本**（credits）= 全程 token × 下发单价。
 
                 与 `_tokens_spent` 同源（含续跑继承的那一段）：成本轴要拦的是"跨接管一共
                 花了多少"，起点必须与预算轴一致，否则接管一次就白送一份成本额度。
+
+                cached 部分单独计价：provider 的 cached_tokens 已含在 input_tokens 内，
+                直接按 input 全价算会把"缓存省下的钱"再收一遍，成本轴因此偏高 ——
+                表现为预算提前触发、同时与网关实际扣费对不上。
                 """
+                cached = resumed_cached_tokens + total_cached_tokens
+                cached_in = min(cached, resumed_input_tokens + total_input_tokens)
+                fresh_in = resumed_input_tokens + total_input_tokens - cached_in
                 return (
-                    (resumed_input_tokens + total_input_tokens) / 1000.0 * self._cost_per_1k_in
+                    fresh_in / 1000.0 * self._cost_per_1k_in
+                    + cached_in / 1000.0 * self._cost_per_1k_cached
                     + (resumed_output_tokens + total_output_tokens)
                     / 1000.0
                     * self._cost_per_1k_out

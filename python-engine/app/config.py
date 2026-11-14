@@ -307,10 +307,14 @@ class Settings(BaseSettings):
     memory_organize_min_turns: int = 10  # 自上次整理以来的累积回合数阈值
     memory_organize_interval_seconds: int = 6 * 3600  # 距上次整理的时长阈值（秒）
 
-    # ── C6：回合级 L2 自动提炼（**默认关**）──
-    # 默认关的理由见 app/memory/distill.py：它是"每回合多一次 LLM 调用"，成本随对话量线性增长。
-    # 开启时用量计入 run 的 `task_budget` tokens 轴（与 S6b 的 grader 同一条规矩）。
-    memory_distill_enabled: bool = False
+    # ── C6：回合级 L2 自动提炼（默认开）──
+    # 默认开的理由：这是长期记忆**唯一的沉淀入口**。关着的时候系统只做召回
+    # （`recall` 每次都跑），却从不写入新的档案条目 —— 表现为"记得住别人的话，
+    # 记不住这个用户的偏好"，也就是会话与记忆永远脱钩。
+    # 成本口径：每回合最多一次小模型调用，只对**真实发生**的调用记账（失败返回 0/0），
+    # 用量并入 run 的 `task_budget` tokens 轴（与 S6b 的 grader 同一条规矩）。
+    # 想关掉时设 `MEMORY_DISTILL_ENABLED=false`，召回与手工 `remember` 不受影响。
+    memory_distill_enabled: bool = True
     memory_distill_max_items: int = 3  # 一次提炼最多入库几条候选
     memory_distill_confidence: int = 30  # 候选条目的置信度（低置信 ⇒ 先被整理淘汰）
 
@@ -323,6 +327,20 @@ class Settings(BaseSettings):
     # ── 插件/内部端点鉴权 ──
     # 与 Go 网关 LLM_GATEWAY_KEY 一致；插件 reload 等内部端点校验 X-API-Key
     llm_gateway_key: str = ""
+
+    # ── 技能发现源（D2：市场级发现）──
+    # 远端技能索引的默认地址（JSON 数组，元素形如
+    # `{name, description, version, author, source}`）。
+    #
+    # 为什么需要它：`skill_discover()` 不带参数时此前**只列本地已安装的技能** ——
+    # 那叫"清单"不叫"发现"。没有默认源时，用户必须先知道某个索引 URL 才能探索，
+    # 生态入口等于不存在。
+    #
+    # 留空 = 不启用远端发现，行为与引入该配置前一致（不擅自出网）。
+    skill_registry_url: str = ""
+    # 发现结果的条数上限：远端索引由第三方提供，可能是几千条。
+    # 全量渲染进工具返回值会直接挤爆上下文。
+    skill_registry_max_items: int = 50
 
     # ── HTTP超时配置（统一）─
     # P0性能修复：集中管理HTTP客户端超时，避免散落各处的魔法数字

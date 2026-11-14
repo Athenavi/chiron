@@ -27,6 +27,16 @@ type BillingConfig struct {
 	FreeCredits      int `json:"free_credits"`       // credits given on registration
 	LLMCostPerToken  int `json:"llm_cost_per_token"` // cost per token (input)
 	LLMCostPerOutput int `json:"llm_cost_per_output"`
+	// LLMCostPerCached 是缓存命中输入的单价（credits / 1000 tokens）。
+	//
+	// **0 = 未配置 ⇒ 沿用 LLMCostPerToken**。选这个默认值的理由：升级不能擅自改账，
+	// 存量部署的账单必须逐分不变；要享受缓存折扣需显式配置。
+	//
+	// 为什么需要它：provider 都会在响应里返回真实 `cached_tokens`（OpenAI 的
+	// `prompt_tokens_details.cached_tokens`、Anthropic 的 `cache_read_input_tokens`），
+	// 而缓存读取的实际成本远低于标准输入。此前 cached 只被记录、不参与换算，
+	// 缓存命中的那部分输入按**全价**扣 —— 用户为已经省下的钱再付一次。
+	LLMCostPerCached int `json:"llm_cost_per_cached"`
 	ImageCost        int `json:"image_cost"` // per image generation
 }
 
@@ -34,6 +44,7 @@ var DefaultConfig = BillingConfig{
 	FreeCredits:      1000,
 	LLMCostPerToken:  1,  // 1 credit per 1000 input tokens
 	LLMCostPerOutput: 2,  // 2 credits per 1000 output tokens
+	LLMCostPerCached: 0,  // 未配置：缓存输入沿用标准输入价，存量账单不变
 	ImageCost:        50, // 50 credits per image
 }
 
@@ -415,13 +426,49 @@ func (m *Manager) MarkFreeUsage(ctx context.Context, userID, turnID string) erro
 	return m.store.MarkFreeUsage(ctx, userID, turnID)
 }
 
-// DeductTokens deducts credits based on token usage.
-func (m *Manager) DeductTokens(userID string, inputTokens, outputTokens int, turnID string) (int, error) {
-	cfg := m.Config()
-	cost := int((int64(inputTokens)*int64(cfg.LLMCostPerToken) + int64(outputTokens)*int64(cfg.LLMCostPerOutput)) / 1000)
+// tokenCost 把 token 用量换算成 credits。**全仓库唯一的换算口径** —— 扣费
+// （DeductTokens）与成本中心明细（RecordTokenUsage）必须共用它：两份实现写在同一
+// 文件里也会漂移（一处改了、另一处没改），表现就是「余额扣了 X、报表记了 Y」，
+// 而且这种偏差只能在事后对账时被发现。
+//
+// cachedTokens 是 provider 响应里**实测**的缓存命中数，已包含在 inputTokens 之内
+// （OpenAI 的 `prompt_tokens` 含 `cached_tokens`；Anthropic 的 `input_tokens` 不含
+// `cache_read_input_tokens`，但两侧的归档口径已在 `usage_accounting.go` 收敛为"含"）。
+// 因此：非缓存输入 = input - cached 按标准输入价，cached 按缓存价。
+//
+// 两个防御：cached 为负或大于 input 时（provider 返回异常）按 0~input 夹取，
+// 绝不产生"负的非缓存输入"把账单算成负成本。
+//
+// 不足 1 credit 按 1 计：单次调用的最小计费单位是 1，否则小额调用会被整段截断成 0。
+func tokenCost(cfg BillingConfig, inputTokens, outputTokens, cachedTokens int) int {
+	cached := cachedTokens
+	if cached < 0 {
+		cached = 0
+	}
+	if cached > inputTokens {
+		cached = inputTokens
+	}
+	fresh := inputTokens - cached
+
+	// 未配置缓存价（0）⇒ 沿用标准输入价：存量部署账单逐分不变。
+	cachedRate := cfg.LLMCostPerCached
+	if cachedRate <= 0 {
+		cachedRate = cfg.LLMCostPerToken
+	}
+
+	cost := int((int64(fresh)*int64(cfg.LLMCostPerToken) +
+		int64(cached)*int64(cachedRate) +
+		int64(outputTokens)*int64(cfg.LLMCostPerOutput)) / 1000)
 	if cost < 1 {
 		cost = 1
 	}
+	return cost
+}
+
+// DeductTokens deducts credits based on token usage.
+func (m *Manager) DeductTokens(userID string, inputTokens, outputTokens, cachedTokens int, turnID string) (int, error) {
+	cfg := m.Config()
+	cost := tokenCost(cfg, inputTokens, outputTokens, cachedTokens)
 	return m.deduct(userID, "llm_token", cost, turnID)
 }
 
@@ -430,9 +477,6 @@ func (m *Manager) DeductTokens(userID string, inputTokens, outputTokens int, tur
 // 此处失败仅影响成本中心明细（记录层错误由调用方告警，不影响计费主链路）。
 func (m *Manager) RecordTokenUsage(ctx context.Context, userID, sessionID string, inputTokens, outputTokens, cachedTokens int, turnID string) error {
 	cfg := m.Config()
-	cost := int((int64(inputTokens)*int64(cfg.LLMCostPerToken) + int64(outputTokens)*int64(cfg.LLMCostPerOutput)) / 1000)
-	if cost < 1 {
-		cost = 1
-	}
+	cost := tokenCost(cfg, inputTokens, outputTokens, cachedTokens)
 	return m.store.RecordBillingRecord(ctx, userID, sessionID, inputTokens, outputTokens, cachedTokens, cost, turnID)
 }

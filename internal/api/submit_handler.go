@@ -75,6 +75,14 @@ func applyCostDefaults(llmConfig map[string]interface{}, c billing.BillingConfig
 	}
 	llmConfig["cost_per_1k_input"] = c.LLMCostPerToken
 	llmConfig["cost_per_1k_output"] = c.LLMCostPerOutput
+	// 缓存输入单价：未配置（<=0）时下发标准输入价，让引擎的 cost 轴与网关账单
+	// 用同一口径。不下发的话引擎按 0 当缓存价，`_cost_spent()` 会少算，
+	// 预算闸门与真实账单分叉 —— 正是"注释写清要同步"那条教训的反面。
+	cachedRate := c.LLMCostPerCached
+	if cachedRate <= 0 {
+		cachedRate = c.LLMCostPerToken
+	}
+	llmConfig["cost_per_1k_cached"] = cachedRate
 }
 
 type SubmitHandler struct {
@@ -900,7 +908,9 @@ func (h *SubmitHandler) submitOnce(ctx context.Context, userID, sessionID, conte
 				}
 			} else {
 				// 超出免费额度或查询失败：正常扣费
-				if charged, err := h.biller.DeductTokens(userID, usage.input, usage.output, turnID); err != nil {
+				// 传 usage.cached：缓存命中的输入按缓存价计（provider 实测值，
+				// 不是估算）。未配置缓存价时 tokenCost 内部回落标准输入价。
+				if charged, err := h.biller.DeductTokens(userID, usage.input, usage.output, usage.cached, turnID); err != nil {
 					slog.Error("billing: DeductTokens failed", "user", userID, "error", err)
 				} else {
 					chargedCredits = &charged

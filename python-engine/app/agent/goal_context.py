@@ -160,8 +160,17 @@ class GoalContext:
         else:
             lines.append("")
             lines.append(
-                "你还没有拆解这个目标。先用 todo_write 把它拆成可执行的步骤，再逐步推进。"
+                "你还没有拆解这个目标。**先**用 todo_write 把它拆成 3-8 个可执行步骤，"
+                "再逐步推进 —— 不要跳过拆解直接动手。"
             )
+        # 委派判断：只在真的"可并行 / 上下文过重"时才值得开子 agent。
+        # 无条件鼓励委派会显著抬高成本（每个子 agent 都是独立会话）。
+        lines.append("")
+        lines.append(
+            "委派判断：若某个步骤可独立完成且会灌进大量无关上下文（大范围检索、"
+            "多文件审查、多方案对比），用 subagent 把它隔离掉，只取回结论；"
+            "步骤之间强依赖、或只需一两次工具调用时，自己做，不要委派。"
+        )
         lines.append("</goal-reminder>")
         return "\n".join(lines)
 

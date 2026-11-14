@@ -319,7 +319,16 @@ func (r *runUsageReconciler) settleOnce(ctx context.Context, row runUsageRow) st
 
 	userID := strings.TrimSpace(snap.TaskMeta.UserID)
 	key := runUsageSettlementKey(row.RunID, snap.Usage.InputTokens, snap.Usage.OutputTokens)
-	if _, err := r.biller.DeductTokens(userID, int(deltaIn), int(deltaOut), key); err != nil {
+	// cached 没有独立的结算水位列（只有 SettledInput/SettledOutput），因此按
+	// **本次 input 增量占 snapshot 总量的比例**分摊 cached。这不是估算：
+	// provider 的 cached_tokens 与 input_tokens 同源同增，比例分摊在"逐 turn 累加"
+	// 与"一次总付"两种顺序下结果一致；比例恒定（同模型同前缀）时则是精确相等。
+	// 不做这一步就等于让兜底路径按全价收缓存命中，与 submit_handler 的正路不一致。
+	cachedDelta := int64(0)
+	if snap.Usage.InputTokens > 0 && snap.Usage.CachedTokens > 0 {
+		cachedDelta = snap.Usage.CachedTokens * deltaIn / snap.Usage.InputTokens
+	}
+	if _, err := r.biller.DeductTokens(userID, int(deltaIn), int(deltaOut), int(cachedDelta), key); err != nil {
 		// 余额不足 / 用户不存在：**不推进水位**，下一轮重试。用量已经真实发生，
 		// 不因为一次扣不动就把它从账上抹掉（方向仍然是"账不平就说出来"）。
 		monitor.IncRunUsageReconcileFailed()
