@@ -259,6 +259,13 @@ _DIGEST_STEP_MESSAGES = 10
 _DIGEST_PER_STEP_CHARS = 200
 #: 伸缩上限：再大的折叠区间也只给这么多。
 _DIGEST_MAX_CHARS_CAP = 4000
+#: 按**字符量**给预算时的比例（折叠区间总字符数的 ~3%）。
+#:
+#: 条数公式对"内容很肥"的区间完全失灵：10 条各 8k 字符的工具结果与 10 条寒暄
+#: 拿到同样的额度。这一项与条数公式取**较大者**，短消息区间因此不受影响。
+#: 3% 的理由：摘要最终要拼回上下文，比例再高就是用"新的大上下文"换旧上下文，
+#: 压缩反而不划算；再低则装不下"改了哪个文件、报了什麼错"。
+_DIGEST_CHAR_RATIO = 0.03
 #: 单条要点的上限。太短会把"改了哪个文件/报了什麼错"切掉，太长则几条就吃满预算。
 _DIGEST_LINE_CHARS = 240
 #: 超预算时「目标与约束」（头端）与「关键结论」（尾端）各自保留的预算份额。
@@ -266,7 +273,7 @@ _DIGEST_LINE_CHARS = 240
 #: **必须双端保留**：头端是最初的需求与硬约束（"这个仓库绝不要动 vendor/"），
 #: 尾端是最近的进展。旧实现用 `"\n".join(parts)[:max_chars]` 从头截断 —— 靠后的
 #: 消息被整个丢掉，而那恰恰是最可能仍然生效的内容。
-#: 合计 0.70，其余留给「未决问题 / 已改文件 / 工具活动」与标题、省略标记。
+#: 合计 0.70，其余留给「未决问题 / 文件变更台账 / 工具活动」与标题、省略标记。
 _DIGEST_HEAD_SHARE = 0.40
 _DIGEST_TAIL_SHARE = 0.30
 
@@ -281,17 +288,93 @@ _FOLD_SUMMARY_MARKER = "[以下是本会话更早上下文的摘要"
 _PRUNE_NOTICE_MARKER = "earlier message(s) were pruned"
 
 
-def _digest_budget(n_messages: int) -> int:
-    """按折叠区间规模给出摘要预算（超上限即封顶）。"""
+def _digest_budget(
+    messages: list[dict[str, Any]] | int, *, total_chars: int | None = None
+) -> int:
+    """按折叠区间的**实际信息量**给出摘要预算（超上限即封顶）。
+
+    只看条数会误判信息量：10 条各 8k 字符的工具结果（≈80k 字符）与 10 条寒暄
+    拿到同样的 2000 字符预算，大区间必然被大量丢弃 —— 而最先被挤掉的恰恰是
+    「改了哪个文件、报了什麼错」（`_DIGEST_HEAD_SHARE` 之外的槽位），长任务
+    跑久了就忘了原本在干什么。现在按字符量给 ~3% 额度，与条数公式**取较大者**
+    （短消息不吃亏），仍受同一个上限封顶。
+
+    参数接受消息列表，或纯条数（既有调用口径，等价于不给字符量）。
+    """
+    if isinstance(messages, int):
+        n_messages = messages
+        chars = int(total_chars or 0)
+    else:
+        n_messages = len(messages)
+        if total_chars is None:
+            chars = 0
+            for m in messages:
+                c = m.get("content")
+                chars += len(c) if isinstance(c, str) else len(str(c or ""))
+        else:
+            chars = total_chars
     steps = max(0, n_messages) // _DIGEST_STEP_MESSAGES
-    return min(_DIGEST_MAX_CHARS_CAP, _DIGEST_BASE_CHARS + steps * _DIGEST_PER_STEP_CHARS)
+    by_count = _DIGEST_BASE_CHARS + steps * _DIGEST_PER_STEP_CHARS
+    by_chars = int(chars * _DIGEST_CHAR_RATIO)
+    return min(_DIGEST_MAX_CHARS_CAP, max(by_count, by_chars))
 
 
-def _condense(text: str, limit: int) -> str:
-    """多行文本压成一行：去空行、折叠空白、超长截断。"""
+def _condense(text: str, limit: int, *, head_share: float = 0.6) -> str:
+    """多行文本压成一行：去空行、折叠空白；超长时**保头保尾**。
+
+    旧实现是 `flat[:limit-1] + "…"` —— 只留头部。而**结论都在尾部**：折叠一段
+    8k 字符的 `pytest` 输出时，留下的恰好是启动横幅，真正要看的 `1 failed in
+    2.1s` 与堆栈末行被切掉，模型于是"以为测试通过了"；折叠一条 `git diff` 时，
+    被切掉的正是最后那个 hunk。头端留约束与命令、尾端留结果，才是摘要该有的形状。
+    """
     flat = " ".join(part.strip() for part in text.splitlines() if part.strip())
     flat = " ".join(flat.split())
-    return flat if len(flat) <= limit else flat[: limit - 1] + "…"
+    if len(flat) <= limit:
+        return flat
+    head = max(1, int(limit * head_share))
+    tail = max(1, limit - head - 1)
+    if head + tail + 1 >= len(flat):
+        return flat
+    return flat[:head] + "…" + flat[-tail:]
+
+
+#: 纯确认/寒暄的整句（小写、去标点后**完全等于**其中之一才过滤）。
+#:
+#: 只精确匹配整句：`"继续"` 是噪音，`"继续，但别动 vendor/"` 是约束。用子串匹配
+#: 会把后者也误杀 —— 而"误杀约束"比"漏滤寒暄"贵得多。
+_ACK_ONLY = frozenset(
+    {
+        "好的", "好", "行", "可以", "嗯", "嗯嗯", "继续", "收到", "明白", "了解",
+        "谢谢", "多谢", "ok", "okay", "yes", "y", "sure", "thanks", "go", "go on",
+        "continue", "proceed", "next",
+    }
+)
+
+
+def _is_acknowledgement(text: str) -> bool:
+    """这段用户输入是否只是确认/寒暄（不值得占"目标与约束"的预算）。"""
+    flat = " ".join(text.split()).strip().lower()
+    flat = flat.strip("。.!！?？~～,，、 ")
+    return len(flat) <= 8 and flat in _ACK_ONLY
+
+
+def _dedupe_keep_order(lines: list[str]) -> list[str]:
+    """按整行去重、保留首次出现的顺序。
+
+    用户会把同一条约束说三遍（"别动 vendor/"），模型也会连着两轮给出同一段结论。
+    不去重的代价是**重复项挤掉不重复项**：预算固定，三遍同名约束等于另外两条
+    真正的约束被删。按整行比而不是按前缀/相似度：误合的代价（丢掉一条约束）
+    远高于漏合（多占一行）。
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    for line in lines:
+        key = line.strip()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(line)
+    return out
 
 
 def _tool_meta_index(messages: list[dict[str, Any]]) -> dict[str, tuple[str, str]]:
@@ -390,6 +473,100 @@ def _split_prior_summary(
 #: 产生"文件产物"的工具。摘要里对它们按路径聚合，而不是每次调用各记一行。
 _WRITE_TOOLS = frozenset({"write_file", "edit_file", "delete_file"})
 
+#: 读取/搜索类工具结果里的「命中数」字段名。
+#:
+#: 摘要里记命中数比记调用次数有用得多：`grep × 7` 什么也说明不了，
+#: `grep foo → 命中 12 处` 才是可以据以判断"这个符号在哪、有多少"的结论。
+_HIT_KEYS = ("matches", "match_count", "total_matches", "count", "total")
+
+#: 错误块保留的行数。栈顶 / 异常名 / 收尾结论——再多就是重复的栈帧。
+_ERROR_BLOCK_LINES = 3
+
+
+def _format_bytes(n: int) -> str:
+    """人类可读的字节数（台账里只用于"这次写了多大"的量级判断）。"""
+    if n < 1024:
+        return f"{n} B"
+    if n < 1024 * 1024:
+        return f"{n / 1024:.1f} KB"
+    return f"{n / (1024 * 1024):.1f} MB"
+
+
+def _diff_stat(diff: Any) -> tuple[int, int]:
+    """从 unified diff 统计新增/删除行数（不计 `+++` / `---` 文件头）。"""
+    added = removed = 0
+    if not isinstance(diff, str):
+        return 0, 0
+    for line in diff.splitlines():
+        if line.startswith("+++") or line.startswith("---"):
+            continue
+        if line.startswith("+"):
+            added += 1
+        elif line.startswith("-"):
+            removed += 1
+    return added, removed
+
+
+def _write_detail(name: str, content: Any) -> str:
+    """写工具这一笔的台账描述：动作 + 规模。
+
+    行数增减优先于字节数 —— 事后判断"这处改动是大是小"靠的是 `+3/-1` 这种数字，
+    而 `bytes` 对文本文件几乎是噪音（改一个字符和重写全文可能同样大小）。
+    """
+    data: Any = None
+    if isinstance(content, str) and content.strip():
+        try:
+            data = json.loads(content.strip())
+        except (TypeError, ValueError):
+            data = None
+    if not isinstance(data, dict):
+        return name
+    if name == "edit_file":
+        added, removed = _diff_stat(data.get("diff"))
+        text = f"{name} +{added}/-{removed}"
+        total = data.get("diff_total_lines")
+        if data.get("diff_truncated") and isinstance(total, int):
+            text += f"（回显折叠，共 {total} 行）"
+        return text
+    nbytes = data.get("bytes")
+    if isinstance(nbytes, int):
+        mode = data.get("mode")
+        suffix = f" {mode}" if isinstance(mode, str) and mode else ""
+        return f"{name}{suffix} {_format_bytes(nbytes)}"
+    return name
+
+
+def _hit_count(content: Any) -> int | None:
+    """读取/搜索类工具结果里的命中数（没有就返回 None）。"""
+    if not isinstance(content, str) or not content.strip():
+        return None
+    try:
+        data = json.loads(content.strip())
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    for key in _HIT_KEYS:
+        value = data.get(key)
+        if isinstance(value, int) and value >= 0:
+            return value
+    return None
+
+
+def _error_block(text: str, limit: int = _ERROR_BLOCK_LINES) -> str:
+    """错误保留**前几行的结构**，只压平空白、不压掉换行。
+
+    此前错误被 `_condense` 压成一行：缩进、栈帧顺序、"哪一行抛出、抛的是什么"
+    全被抹掉，而那是事后唯一能据以修的信息。这里只裁行数与单行长度。
+    """
+    lines = [ln.rstrip() for ln in str(text).splitlines() if ln.strip()]
+    if not lines:
+        return ""
+    picked = [ln[:240] for ln in lines[:limit]]
+    if len(lines) > limit:
+        picked.append(f"…（另有 {len(lines) - limit} 行）")
+    return "\n    ".join(picked)
+
 
 def _slot_collect(
     messages: list[dict[str, Any]], meta: dict[str, tuple[str, str]]
@@ -403,7 +580,8 @@ def _slot_collect(
     """
     constraints: list[str] = []
     problems: list[str] = []
-    changed: dict[str, int] = {}
+    changed: dict[str, list[str]] = {}
+    reads: list[str] = []
     conclusions: list[str] = []
     activity: dict[str, int] = {}
 
@@ -415,12 +593,20 @@ def _slot_collect(
             call_id = str(msg.get("tool_call_id") or "")
             name, arg = meta.get(call_id, ("tool", ""))
             activity[name] = activity.get(name, 0) + 1
-            if name in _WRITE_TOOLS and arg:
-                changed[arg] = changed.get(arg, 0) + 1
             err = _tool_error(content)
             if err:
+                # 出错的不进台账：文件**没改成**，记进去会让模型以为已经改过了。
                 label = f"{name} {arg}".strip()
-                problems.append(f"- {label} → 错误: {_condense(err, 160)}")
+                problems.append(f"- {label} → 错误: {_error_block(err)}")
+                continue
+            if name in _WRITE_TOOLS and arg:
+                changed.setdefault(arg, []).append(_write_detail(name, content))
+                continue
+            hits = _hit_count(content)
+            if hits is not None and arg:
+                # 搜索/读取记**命中数**：`grep × 7` 说明不了什么，
+                # `grep foo → 命中 12` 才是事后还能据以判断的结论。
+                reads.append(f"- {name} {arg} → 命中 {hits}")
             continue
 
         if role == "assistant" and not (isinstance(content, str) and content.strip()):
@@ -446,7 +632,10 @@ def _slot_collect(
         if _PRUNE_NOTICE_MARKER in text:
             continue
         if role == "user":
-            constraints.append(f"- {_condense(text, _DIGEST_LINE_CHARS)}")
+            # 纯确认/寒暄不进约束槽：`"继续"` 与 `"绝不要动 vendor/"` 占同一份额度，
+            # 折几次之后预算全被前者吃掉，真正的硬约束反而被挤出（见 `_is_acknowledgement`）。
+            if not _is_acknowledgement(text):
+                constraints.append(f"- {_condense(text, _DIGEST_LINE_CHARS)}")
         else:
             conclusions.append(f"- {_condense(text, _DIGEST_LINE_CHARS)}")
 
@@ -456,15 +645,27 @@ def _slot_collect(
     if problems:
         slots.append(("未决问题", problems))
     if changed:
-        slots.append(
-            ("已改文件", [f"- {path}（{n} 次）" for path, n in sorted(changed.items())])
-        )
+        # 「文件变更台账」而不是「已改文件 × N 次」：`x.py（3 次）` 只说明动过，
+        # 说明不了改成了什么规模。台账记 `edit_file +3/-1`、`write_file 2.1 KB`、
+        # 以及回显是否被折叠 —— 折叠了说明改动很大，事后要重读那一段。
+        ledger: list[str] = []
+        for path, details in sorted(changed.items()):
+            shown = details[-3:]
+            text = "；".join(shown)
+            if len(details) > len(shown):
+                text += f"（另有 {len(details) - len(shown)} 笔更早改动）"
+            ledger.append(f"- {path}: {text}")
+        slots.append(("文件变更台账", ledger))
     if conclusions:
         slots.append(("关键结论", conclusions))
+    if reads:
+        slots.append(("检索命中", reads))
     if activity:
         ranked = sorted(activity.items(), key=lambda kv: (-kv[1], kv[0]))
         slots.append(("工具活动", [f"- {name} × {n}" for name, n in ranked]))
-    return slots
+    # 逐槽去重：重复项挤掉的是**不重复项**（预算固定）。放在返回前统一做，
+    # 各槽位的收集逻辑因此不必各自关心"这条是不是已经记过了"。
+    return [(name, _dedupe_keep_order(lines)) for name, lines in slots]
 
 
 def _take_lines(lines: list[str], budget: int, *, from_tail: bool) -> list[str]:
@@ -489,7 +690,7 @@ def _render_slots(slots: list[tuple[str, list[str]]], max_chars: int) -> str:
 
     头端是"目标与约束"（最初的要求与硬约束，丢了就再也找不回来），
     尾端是"关键结论"（最近的进展，最可能仍然生效）。中间槽位（未决问题 /
-    已改文件 / 工具活动）按优先级吃剩余预算。
+    文件变更台账 / 检索命中 / 工具活动）按优先级吃剩余预算。
     """
     sections = [(name, f"## {name}\n" + "\n".join(lines), lines) for name, lines in slots]
     joined = "\n\n".join(text for _name, text, _lines in sections)
@@ -514,7 +715,15 @@ def _render_slots(slots: list[tuple[str, list[str]]], max_chars: int) -> str:
         if spare <= 0:
             dropped += len(_lines)
             continue
-        chunk = text if len(text) <= spare else text[:spare]
+        # **按行**取，不按字符切：`text[:spare]` 会把最后一行切成半句，
+        # 而那一行往往正是"改了哪个文件"——半句比没有更糟（读的人不知道它不完整）。
+        picked = _take_lines(_lines, spare - len(name) - 6, from_tail=True)
+        if not picked:
+            dropped += len(_lines)
+            continue
+        chunk = f"## {name}\n" + "\n".join(picked)
+        if len(picked) < len(_lines):
+            dropped += len(_lines) - len(picked)
         middle.append(chunk)
         spare -= len(chunk) + 2
 
@@ -555,7 +764,8 @@ def _extractive_digest(
     `runtime._upgrade_fold_digests`（需显式开启），本函数始终是**永远可用的本地保底**。
     """
     msgs = messages or []
-    budget = _digest_budget(len(msgs)) if max_chars is None else max_chars
+    # 传**消息本身**而不是条数：预算要能看见"内容有多肥"（见 `_digest_budget`）。
+    budget = _digest_budget(msgs) if max_chars is None else max_chars
     prior, fresh = _split_prior_summary(msgs)
     slots = _slot_collect(fresh, _tool_meta_index(fresh))
     if prior:
@@ -713,7 +923,7 @@ def _prune_messages(
             recall_ref = ""
 
     # 被裁掉区间的 `messages.id` 列表：这是 `read_archive` 真正能查的 ref。
-    # 只给 `sn_xxx`（Redis `result_store`，2 小时 TTL）是不够的 —— 会话过夜再回来，
+    # 只给 `sn_xxx`（Redis `result_store`，24 小时 TTL）是不够的 —— 会话隔天再回来，
     # 那个 ref 已经过期，模型拿着一条永远取不回的线索。
     covered_ids = [str(m["id"]) for m in processed[:start] if m.get("id")]
     # 折叠区间用 `messages.seq`（半开区间）。`processed` 里若有消息缺 seq

@@ -92,7 +92,10 @@ def _read_window(target: Path, offset: int, limit: int) -> tuple[list[str], int]
     数完 `total_lines` 是为了它对前端的既有承诺（`ToolResultBlock.vue` 显示「N 行」）；
     代价是仍要扫一遍文件，换来的收益是内存从 O(文件大小) 降到 O(窗口)。
 
-    **超大文件不走这里**（见 `_read_window_uncounted`）：数行必须扫完全文，而 100MB
+    **只在缓存未命中时走这里**（见 :func:`_read_page`）：同一文件连续翻页时，
+    从第二页起改用 :func:`_read_window_only` + 缓存的行数，不再重复扫全文。
+
+    **超大文件也不走这里**（见 `_read_window_uncounted`）：数行必须扫完全文，而 100MB
     日志每次翻页都扫 100MB 是纯浪费 —— 翻 10 页就是 1GB 的读放大。
     """
     page: list[str] = []
@@ -105,6 +108,41 @@ def _read_window(target: Path, offset: int, limit: int) -> tuple[list[str], int]
             if len(page) < limit:
                 page.append(raw.rstrip("\n").rstrip("\r"))
     return page, total
+
+
+def _read_window_only(target: Path, offset: int, limit: int) -> list[str]:
+    """只取窗口，**不数总行**：读到窗口末尾就停。
+
+    与 :func:`_read_window` 的差别只在于不需要扫完整个文件 —— 总行数由调用方从
+    缓存提供。大文件深分页（`offset` 很大）时仍然要跳过前面所有行，但那只做计数、
+    不做字符串处理，比"扫全文 + 数行 + 取窗口"轻得多。
+    """
+    page: list[str] = []
+    with open(target, encoding="utf-8", errors="replace") as handle:
+        skipped = 0
+        for raw in handle:
+            if skipped < offset:
+                skipped += 1
+                continue
+            if len(page) >= limit:
+                break
+            page.append(raw.rstrip("\n").rstrip("\r"))
+    return page
+
+
+#: 总行数缓存：`str(path) -> (size, mtime_ns, total_lines)`。
+#:
+#: **为什么需要**：`total_lines` 每次都要数完整个文件，而前端/调用方每翻一页就要一次。
+#: 同一文件连翻 10 页 = 10 次全文扫描（读放大量 = 页数 × 文件大小），这在长任务里是
+#: 实打实的浪费 —— 模型常常先读 1-2000 行、再读 2001-4000 行、再读……
+#:
+#: **为什么用 (size, mtime) 做校验**：文件被改写后行数会变，只按路径缓存会给出过期的
+#: 数字，进而让 `truncated` 判错（模型以为读完了、其实下面还有）。`st_mtime_ns` 足够
+#: 细粒度地捕捉同秒内的改写。
+_LINE_COUNT_CACHE: dict[str, tuple[int, int, int]] = {}
+#: 缓存条数上限：长任务会在一个进程里读很多文件，不设限等于慢慢泄漏。
+#: 满了就整体清空 —— 这里存的是可重算的派生数据，不做 LRU 精算。
+_LINE_COUNT_CACHE_MAX = 256
 
 
 #: 超过这个字节数的文件**不再统计总行数**。
@@ -223,18 +261,25 @@ class LocalWorkspaceBackend:
         return await self._read_page(target, offset, limit)
 
     async def _read_page(self, target: Path, offset: int, limit: int) -> ReadResult:
-        """分页读的**实现体**：大文件走不数总行的快路径。
+        """分页读的**实现体**：大文件走不数总行的快路径，小文件复用行数缓存。
 
         阈值判断放在这里而不是 `read`：`read` 还要处理二进制探测与错误包装，
         而"数不数总行"只跟文件大小有关，单独一层更容易读。
 
         `total_lines` 对大文件返回 `-1`（未知）：调用方（`read_file`）据此把
         提示写成"文件很大，未统计行数"，而不是给出一个**错误的具体数字**。
+
+        **行数缓存（P1-2）**：`total_lines` 要扫完全文才数得出来，而调用方每翻一页
+        都要问一次 —— 读 10 页就是 10 次全文扫描。缓存的 key 用 `(st_size, st_mtime_ns)`
+        校验，文件一改就自然失效；命中时改走 :func:`_read_window_only`，只读到窗口末尾。
         """
         try:
-            size = await asyncio.to_thread(lambda: target.stat().st_size)
+            info = await asyncio.to_thread(lambda: target.stat())
+            size = info.st_size
+            stamp = (info.st_size, getattr(info, "st_mtime_ns", 0))
         except OSError:
             size = 0
+            stamp = (0, 0)
         if size > _LINE_COUNT_MAX_BYTES:
             page, more = await asyncio.to_thread(_read_window_uncounted, target, offset, limit)
             return ReadResult(
@@ -245,7 +290,19 @@ class LocalWorkspaceBackend:
                 limit=limit,
                 truncated=more,
             )
-        page, total_lines = await asyncio.to_thread(_read_window, target, offset, limit)
+
+        cache_key = str(target)
+        cached = _LINE_COUNT_CACHE.get(cache_key)
+        if cached is not None and cached[0] == stamp[0] and cached[1] == stamp[1]:
+            # 命中：行数已知，只取窗口，不重扫全文。
+            page = await asyncio.to_thread(_read_window_only, target, offset, limit)
+            total_lines = cached[2]
+        else:
+            page, total_lines = await asyncio.to_thread(_read_window, target, offset, limit)
+            if len(_LINE_COUNT_CACHE) >= _LINE_COUNT_CACHE_MAX:
+                # 存的是可重算的派生数据，不做 LRU 精算：满了整体清空即可。
+                _LINE_COUNT_CACHE.clear()
+            _LINE_COUNT_CACHE[cache_key] = (stamp[0], stamp[1], total_lines)
         return ReadResult(
             path=str(target),
             content="\n".join(page),
@@ -322,9 +379,14 @@ class LocalWorkspaceBackend:
         occurrences = text.count(old)
         if occurrences == 0:
             return EditResult(path=str(target), error="old text not found")
-        await asyncio.to_thread(
-            target.write_text, text.replace(old, new), encoding="utf-8"
-        )
+        # 走原子替换写（临时文件 + os.replace），不用 `write_text`：
+        # 后者会**先截断再写**，进程在中间被杀 / 磁盘写满，留下的就是一个
+        # 被清空或半截的文件 —— 原内容已经没了，这是不可恢复的损坏。
+        updated = text.replace(old, new)
+        try:
+            await asyncio.to_thread(_atomic_write_text, target, updated)
+        except OSError as exc:
+            return EditResult(path=str(target), error=str(exc))
         return EditResult(path=str(target), occurrences=occurrences)
 
     async def delete(self, path: str) -> DeleteResult:

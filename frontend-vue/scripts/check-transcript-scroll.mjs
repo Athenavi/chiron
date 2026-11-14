@@ -36,7 +36,7 @@ const NOT_TRANSCRIPT = {
   'composables/useVirtualList.ts': '通用虚拟列表（非消息列表）',
   'views/ChatView.vue':
     '统一任务模式的 .unified-list（**第二条渲染路径**，不经 transcriptViewport；' +
-    '属已知问题，见 docs/reasonix-ui-ux-gap-analysis.md §4.1，修法是把该模式也复用 MessageList）',
+    '属已知问题，修法是把该模式也复用 MessageList）',
 }
 
 const EXEMPT = {

@@ -174,6 +174,57 @@ async def test_local_backend_reports_truncation_itself(tmp_path: Path, monkeypat
     assert whole.truncated is False
 
 
+@pytest.mark.asyncio
+async def test_local_backend_reuses_line_count_across_pages(tmp_path: Path, monkeypatch):
+    """P1-2：翻页复用行数缓存，第二页起不再扫全文重数。
+
+    数总行必须扫完整个文件，而调用方每翻一页都要问一次 —— 读 10 页就是 10 次全文
+    扫描。这里用"把全文扫描函数换掉"来证明第二页**没有**再走它：若缓存失效，这个
+    替身会把 `total_lines` 改成一个错误值，`truncated` 判据随之出错。
+    """
+    from app.backends import local as local_mod
+
+    monkeypatch.setenv("SANDBOX_ROOT", str(tmp_path))
+    backend = LocalWorkspaceBackend()
+    await backend.write("many.txt", "\n".join(f"line{i}" for i in range(50)))
+    local_mod._LINE_COUNT_CACHE.clear()
+
+    first = await backend.read("many.txt", offset=0, limit=10)
+    assert first.total_lines == 50
+
+    scans: list[int] = []
+    real = local_mod._read_window
+
+    def _spy(*args, **kwargs):
+        scans.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(local_mod, "_read_window", _spy)
+    second = await backend.read("many.txt", offset=10, limit=10)
+    assert scans == [], "第二页仍在扫全文重数行数（行数缓存未命中）"
+    # 缓存提供行数后，续读判据仍要正确
+    assert second.total_lines == 50
+    assert second.content.splitlines() == [f"line{i}" for i in range(10, 20)]
+    assert second.truncated is True
+
+
+@pytest.mark.asyncio
+async def test_local_backend_line_count_cache_invalidated_on_write(tmp_path: Path, monkeypatch):
+    """文件被改写后行数缓存必须失效 —— 否则 `truncated` 会按过期行数判错。"""
+    from app.backends import local as local_mod
+
+    monkeypatch.setenv("SANDBOX_ROOT", str(tmp_path))
+    backend = LocalWorkspaceBackend()
+    await backend.write("shrinking.txt", "\n".join(f"line{i}" for i in range(50)))
+    local_mod._LINE_COUNT_CACHE.clear()
+
+    assert (await backend.read("shrinking.txt", offset=0, limit=10)).total_lines == 50
+    await backend.write("shrinking.txt", "only one line")
+    after = await backend.read("shrinking.txt", offset=0, limit=10)
+    assert after.total_lines == 1, "写后仍读到缓存里的旧行数"
+    assert after.truncated is False
+
+
 # ── 片 2：其余文件工具同样经后端 ──────────────────────────────────────────
 
 

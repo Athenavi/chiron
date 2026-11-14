@@ -154,7 +154,12 @@ class Settings(BaseSettings):
     #: 评审用的模型；空 = 复用本轮的模型。
     guardian_model: str = ""
     default_model: str = "claude-sonnet-4-20250514"
-    default_max_tokens: int = 4096
+    #: 单次调用的输出上限**回落值**（`llm_models.max_output_tokens` 查不到时才生效）。
+    #:
+    #: 旧值 4096 是"整篇写入被 max_tokens 截断 → arguments 半截 JSON → 工具拒绝执行
+    #: → 重发又重演"这条长任务死循环的上游根因。现代化模型普遍支持 8k 以上，真正
+    #: 窄输出的旧模型应当在模型库里如实登记，而不是给所有人一个极小兜底。
+    default_max_tokens: int = 8192
     default_temperature: float = 0.1
 
     #: 折叠摘要是否用**模型**生成（P2-1）。

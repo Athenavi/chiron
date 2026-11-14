@@ -2,8 +2,8 @@
 
 与 `read_tool_result` 的分工：
 
-* `read_tool_result` 走 Redis 的 `result_store`，TTL **2 小时**（`result_store.py:18`）——
-  会话内够用，隔天就取不回了；
+* `read_tool_result` 走 Redis 的 `result_store`，TTL **24 小时**（`result_store.py`）——
+  长任务够用，隔天就取不回了；
 * `read_archive` 走 PG 的 `messages` **持久表**，是"压缩后原文可召回"的长期通道。
 
 两者互补而不是替代：压缩发生时先把原文塞进 `result_store`（快、不落库），

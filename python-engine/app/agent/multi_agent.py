@@ -17,6 +17,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.config import settings
 from app.gateway.provider import ChatMessage, ToolCall
 from app.gateway.router import GatewayRouter
 from app.tools.registry import ToolRegistry, registry
@@ -59,7 +60,7 @@ class SubAgent:
         gateway: GatewayRouter | None = None,
         model: str = "claude-sonnet-4-20250514",
         max_turns: int = 5,
-        max_tokens: int = 4096,
+        max_tokens: int = 0,
         temperature: float = 0.7,
     ):
         self.name = name
@@ -69,7 +70,9 @@ class SubAgent:
         self._gateway = gateway
         self.model = model
         self.max_turns = max_turns
-        self.max_tokens = max_tokens
+        # 0 = 未指定 ⇒ 用统一配置的回落值（不要再各处硬编码 4096：
+        # 那个值曾让整篇写入被截断成半截 JSON，进而触发工具拒绝 + 重发的死循环）
+        self.max_tokens = max_tokens or settings.default_max_tokens
         self.temperature = temperature
         self._openai_tools: list[dict[str, Any]] | None = None  # P8: 缓存工具转换结果
 

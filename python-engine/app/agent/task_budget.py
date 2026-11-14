@@ -28,8 +28,16 @@ from dataclasses import dataclass, field
 
 #: 主 Agent 步数上限：一轮里 20 次工具调用是常态，60 足够跑完多轮工具链
 DEFAULT_MAX_STEPS = 60
-#: 主 Agent token 上限：只拦"明显失控"（正常长任务在数十万 token 量级）
+#: 主 Agent token 上限：只拦"明显失控"（正常长任务在数十万 token 量级）。
+#:
+#: 这是**下限**，不是固定值：主 Agent 的实际默认值由 runtime 按模型窗口算
+#: （`窗口 × 轮数 / 2`，见 `runtime.run` 的 0.4b 段）。固定 400k 对 128K 窗口的模型
+#: 只够 2–3 轮 —— 每轮都要重发整段上下文，长任务因此报 `budget_exceeded:tokens`
+#: 停下，表现和"轮数太少"完全一样。子 Agent 仍用这个固定值（它跑得短）。
 DEFAULT_MAX_TOKENS = 400_000
+#: token 轴的上限封顶。窗口联动后可能算出很大的数（50 轮 × 半个 128K 窗口 = 3.2M），
+#: 但预算的职责是"拦明显失控"而不是"精确计费"—— 封顶保证失控仍能被拦住。
+DEFAULT_MAX_TOKENS_CEILING = 8_000_000
 #: wall 默认不限：该不该限时由调用方 / 网关的回合超时决定，引擎侧不重复限制
 DEFAULT_MAX_SECONDS = 0
 #: 成本默认不限：计价口径随 provider 变，交给上层显式传

@@ -656,15 +656,134 @@ def _loop_guard_result(
 
     **保留原结果**（模型仍看得到已经拿到的内容），只在后面附一条可执行的要求 ——
     只说"你被拦住了"没有价值，说清"重复了几次 / 结果是否相同"模型才有机会换策略。
+
+    两级升级（见 `LoopVerdict.escalated`）：首次命中只附警告、**不写 `error` 字段**，
+    因为 `error` 在模型眼里等于"这次没成"—— 它会让模型据此重试或改道，而这一次其实
+    执行了。硬拒（连续命中）才写 `error`，与既有语义一致。
     """
     from app.agent.loop_guard import loop_hint
 
     hint = loop_hint(verdict)
     out: dict[str, Any] = dict(previous) if isinstance(previous, dict) else {}
-    existing = out.get("error")
-    out["error"] = f"{existing}\n{LOOP_GUARD_TAG} {hint}" if existing else f"{LOOP_GUARD_TAG} {hint}"
+    escalated = bool(getattr(verdict, "escalated", False))
+    if escalated:
+        existing = out.get("error")
+        out["error"] = (
+            f"{existing}\n{LOOP_GUARD_TAG} {hint}" if existing else f"{LOOP_GUARD_TAG} {hint}"
+        )
+    else:
+        # 软警告：结果照常返回，只多一条提示让模型自己判断该不该换做法。
+        out["loop_guard_warning"] = f"{LOOP_GUARD_TAG} {hint}"
     out["loop_guard"] = getattr(verdict, "kind", "")
     return out
+
+
+#: 输出被 `max_tokens` 截断时，按工具给出**能直接照做**的恢复路径。
+#:
+#: 原提示只有一句 "Re-issue the full tool call" —— 对 `write_file` 是死路：
+#: 整篇内容一次生成必然再次撞上同一个上限，模型于是原样重发、再次被截断，
+#: 反复几轮后步数/轮数耗尽。长文件必须分块写，大范围替换必须走行号，
+#: 这些要在提示里说清楚，模型才知道"怎么做"而不是只知道"再来一次"。
+_TRUNCATION_RECOVERY: dict[str, str] = {
+    "write_file": (
+        "不要原样重发整篇内容：改用 mode='append' 分块写入 —— 首块可 overwrite，"
+        "之后每块 append，每块控制在几十行以内，直到写完。"
+    ),
+    "edit_file": (
+        "不要原样重发整段替换文本：改用行范围模式 start_line/end_line/new_content，"
+        "每次只替换一个小区间；确需精确锚点时用较短的 old_string + new_string。"
+    ),
+}
+
+
+def _truncation_recovery_hint(tool_name: str) -> str:
+    """按工具给出**能直接照做**的恢复路径（未知工具退化为缩小参数）。"""
+    return _TRUNCATION_RECOVERY.get(
+        tool_name,
+        "Re-issue the call with smaller arguments "
+        "(narrower range, or shorter content per call).",
+    )
+
+
+def _truncation_notice(tool_name: str) -> str:
+    """被 `max_tokens` 截断后回灌的恢复指引。
+
+    保留 ``error`` 前缀（调用方据此判定失败），恢复路径按工具名给出；
+    未知工具退化为"缩小参数"的通用建议。
+    """
+    return (
+        f"error: output truncated by max_tokens before tool '{tool_name}' was complete; "
+        f"its arguments may be incomplete and were NOT executed. "
+        f"{_truncation_recovery_hint(tool_name)}"
+    )
+
+
+#: 参数被截断后**可以安全地用修复结果执行**的工具。
+#:
+#: 判据是"参数残缺不会造成不可逆后果"：读/查类工具即使丢了尾部字段，结果也只是
+#: 范围小一点，模型据此还能继续；而 `write_file` / `edit_file` 的 `content` /
+#: `new_string` 被截断时，执行等于**把半篇内容落盘**（毁掉原文件），必须让它重发。
+_REPAIRABLE_TOOLS = frozenset(
+    {
+        "read_file",
+        "ls",
+        "grep_files",
+        "search_files",
+        "git_status",
+        "recall",
+        "skill_list",
+        "todo_write",
+        "use_capability",
+        "result_read",
+    }
+)
+
+
+def _repair_truncated_json(raw: str) -> Any | None:
+    """尽力把被 `max_tokens` 截断的 arguments 修成可解析的对象。
+
+    只在"截断发生在尾部"时有解：补上缺失的引号与闭合括号即可。补不出来
+    （中间就坏了、或截断在半截转义序列里）返回 ``None``。
+
+    **为什么不猜**：猜错的参数比没有参数更危险 —— 工具会在半懂的状态下动手，
+    而调用方无从知道它拿到的其实是编出来的值。这里只做机械闭合，不做语义补全。
+    """
+    s = (raw or "").strip()
+    if not s or s[0] not in "{[":
+        return None
+    in_str = False
+    esc = False
+    stack: list[str] = []
+    for ch in s:
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+        elif ch == '"':
+            in_str = True
+        elif ch in "{[":
+            stack.append("}" if ch == "{" else "]")
+        elif ch in "}]":
+            if stack:
+                stack.pop()
+    if not stack and not in_str:
+        # 结构本来就是闭合的：这不是"被截断"，是参数真的坏了，别硬修。
+        return None
+    fixed = s[:-1] if esc else s
+    if in_str:
+        fixed += '"'
+    fixed = fixed.rstrip()
+    while fixed.endswith((",", ":", " ")):
+        fixed = fixed[:-1].rstrip()
+    fixed += "".join(reversed(stack))
+    try:
+        obj = json.loads(fixed)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    return obj if isinstance(obj, (dict, list)) else None
 
 
 # ── 消息配对压缩 ──
@@ -873,6 +992,32 @@ class AgentRuntime:
             return CompactionConfig(**mode_cfg.compaction)
         return None
 
+    @staticmethod
+    def _context_budget(
+        mode_cfg: ModeConfig, llm_config: dict[str, Any], window: int = 0
+    ) -> tuple[int, float]:
+        """上下文预算与触发比例 —— **压缩与投影共用这一份口径**。
+
+        此前这两条路径各算各的：压缩用 `配置 > 窗口表 > MAX_CONTEXT_TOKENS` 三级回落，
+        而投影（`_project_over_budget`）直接拿模块级常量 `MAX_CONTEXT_TOKENS` 比 ——
+        于是同一个会话里出现两套数字：窗口 200k 的模型在 128k 就被投影掉原文（过早有损），
+        窗口 64k 的模型却到 128k 才认为该压缩（早已溢出，只能靠 `_force_compact` 救）。
+        投影是有损的，用错的阈值不只是"多压一次"，是**在放得下的时候丢了原文**。
+
+        返回 `(budget, trigger_ratio)`：`budget` 是上下文窗口预算，`trigger_ratio` 是
+        触发线占比（默认 `PRUNE_THRESHOLD`，与 `CompactionConfig.threshold_ratio` 同源）。
+        调用方判"该不该动手"时一律用 `budget * trigger_ratio`，别再自己取常量。
+        """
+        comp_cfg = AgentRuntime._resolve_compaction(mode_cfg, llm_config)
+        budget = (
+            (comp_cfg.max_context_tokens if comp_cfg else 0) or window or MAX_CONTEXT_TOKENS
+        )
+        # 显式配了合法比例就听它的；配了 0 / 负数是"关掉阈值"的哨兵，回到默认触发线。
+        trigger = PRUNE_THRESHOLD
+        if comp_cfg is not None and comp_cfg.threshold_ratio > 0:
+            trigger = comp_cfg.threshold_ratio
+        return budget, trigger
+
     def _compact_with_notice(
         self,
         messages: list[dict[str, Any]],
@@ -892,11 +1037,12 @@ class AgentRuntime:
 
         `window` 是模型窗口表给出的预算（C4）；优先级 = **显式配置 > 窗口表 > 历史常量**，
         因为显式配置是租户/模式的明确口径，而常量只是"查不到时的兜底"。
+
+        预算与触发比例统一由 `_context_budget` 给出 —— 与 `_force_compact`、
+        `_project_over_budget` 同一份口径，避免三处各算一套。
         """
         comp_cfg = self._resolve_compaction(mode_cfg, llm_config)
-        budget = (
-            (comp_cfg.max_context_tokens if comp_cfg else 0) or window or MAX_CONTEXT_TOKENS
-        )
+        budget, _trigger = self._context_budget(mode_cfg, llm_config, window)
         comp_cfg = (
             replace(comp_cfg, max_context_tokens=budget, model=model)
             if comp_cfg is not None
@@ -946,9 +1092,7 @@ class AgentRuntime:
         （例如单条消息本身就超窗），继续重试只是烧钱。
         """
         comp_cfg = self._resolve_compaction(mode_cfg, llm_config)
-        budget = (
-            (comp_cfg.max_context_tokens if comp_cfg else 0) or window or MAX_CONTEXT_TOKENS
-        )
+        budget, _trigger = self._context_budget(mode_cfg, llm_config, window)
         forced = replace(
             comp_cfg or CompactionConfig(),
             max_context_tokens=budget,
@@ -1350,7 +1494,12 @@ class AgentRuntime:
             logger.warning("compaction folds persist failed: %s", exc)
 
     async def _project_over_budget(
-        self, messages: list[dict[str, Any]], task: AgentTask, model: str
+        self,
+        messages: list[dict[str, Any]],
+        task: AgentTask,
+        model: str,
+        mode_cfg: ModeConfig | None = None,
+        llm_config: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """全量历史超预算时用 `session_folds` 投影替代；不超预算则原样返回。
 
@@ -1358,11 +1507,30 @@ class AgentRuntime:
         「清空缓存后重建结果不变」这条验收成立 —— 投影只是预算不足时的降级路径，
         不是新的事实来源。摘要质量再高，也不该在放得下的时候顶替原文。
 
+        **阈值与压缩同源**（`_context_budget`）：过去这里直接拿模块级常量
+        `MAX_CONTEXT_TOKENS` 比，而压缩走「配置 > 模型窗口表 > 常量」三级回落 ——
+        窗口 200k 的模型明明放得下，却在 128k 就被投影掉原文。投影是有损的，
+        判定用错阈值不是"多压一次"，而是**在放得下的时候丢了原文**。
+
         **任何环节失败都返回原 `messages`**：读不到 fold、区间校验不过、摘要为空，
         统统回退全量。宁可超预算走既有的实时裁剪，也不发一份漏段的投影。
         """
         try:
-            if _estimate_tokens(messages, model=model) <= MAX_CONTEXT_TOKENS:
+            window = 0
+            try:
+                from app.agent import model_window
+
+                window = await model_window.context_window(model)
+            except Exception as exc:  # noqa: BLE001 — 窗口查询只是调参输入
+                logger.debug("context window lookup failed (%s): %s", model, exc)
+
+            budget, trigger = self._context_budget(
+                mode_cfg if mode_cfg is not None else get_mode_config(None),
+                llm_config or {},
+                window,
+            )
+            trigger_at = int(budget * trigger)
+            if _estimate_tokens(messages, model=model) <= trigger_at:
                 return messages
 
             from app.agent import history_writer
@@ -1580,9 +1748,47 @@ class AgentRuntime:
         # token，引擎侧没有任何闸门（唯一兜底是网关的回合超时）。这里建预算，在**每轮**
         # 与**每次工具调用后**检查；越界走失败收尾（与子 Agent 同一语义）——
         # 产出 `budget_exceeded:<轴>`，前端能看到原因，而不是静默中断。
+        from app.agent.task_budget import DEFAULT_MAX_STEPS as _DEFAULT_STEPS
+        from app.agent.task_budget import DEFAULT_MAX_TOKENS as _DEFAULT_TOKENS
+        from app.agent.task_budget import DEFAULT_MAX_TOKENS_CEILING as _TOKENS_CEILING
         from app.agent.task_budget import from_env as _budget_from_env
 
-        budget = _budget_from_env()
+        # 步数轴随轮数联动。
+        #
+        # `steps` 固定 60 而 `max_turns` 可配到 50（乃至更高）时：50 轮里每轮 2–3 次
+        # 工具调用就把步数耗尽 —— 轮次还有富余，步数先见底，表现和"轮数太少"完全一样
+        # （任务没做完就报 `budget_exceeded:steps` 停下）。按每轮 4 次工具给足余量，
+        # 并把下限钉在 60，保证短任务行为不变。
+        #
+        # 优先级不变：显式参数 > `AGENT_MAX_STEPS` > 这里算出的默认值 —— 运维若显式
+        # 配了步数上限，那仍然是最终口径。
+        _turns_limit = int(getattr(task, "max_turns", 0) or 0)
+        _default_steps = max(_DEFAULT_STEPS, _turns_limit * 4)
+
+        # token 轴随**模型窗口**联动，而不是钉一个常数。
+        #
+        # 每轮都要重发整段上下文，所以"一轮的消耗"量级就是窗口的一大截。固定 400k
+        # 对 128K 窗口的模型只够 2–3 轮：轮次还有富余，token 先见底，表现与"轮数太少"
+        # 完全一样（`budget_exceeded:tokens` 在任务做完前就判停）。按"每轮半个窗口 ×
+        # 轮数"给默认值；下限仍钉 400k、上限封顶，保证短任务行为不变、失控仍拦得住。
+        #
+        # 这里同步读窗口缓存（`cached_window`）：未命中就回落默认窗口，不为读库在这一行
+        # await —— 预算构造处在每轮开场的必经路径上。
+        from app.agent import model_window as _model_window
+
+        _task_llm = dict(getattr(task, "llm_config", {}) or {})
+        _budget_model = str(_task_llm.get("model") or "")
+        _budget_window = (
+            _model_window.cached_window(_budget_model) if _budget_model else None
+        ) or _model_window.DEFAULT_CONTEXT_WINDOW
+        _turns_for_tokens = _turns_limit or 10
+        _default_tokens = min(
+            _TOKENS_CEILING,
+            max(_DEFAULT_TOKENS, int(_budget_window * 0.5) * _turns_for_tokens),
+        )
+        budget = _budget_from_env(
+            default_steps=_default_steps, default_tokens=_default_tokens
+        )
         self._budget = budget
         self._tool_steps = 0
         # P5：恢复状态（每次 run 新建）—— 判据是"同一个失败操作"，不是"试了几次"。
@@ -1852,10 +2058,14 @@ class AgentRuntime:
                         # 全量超预算时才用折叠投影替代（见 _project_over_budget）：
                         # 投影是有损的，不超预算时全量既更准，也让
                         # 「清空缓存后重建结果不变」这条验收成立。
+                        # 传 `mode_cfg` / `llm_config`：投影的触发阈值必须与压缩**同源**，
+                        # 否则同一会话里存在两套预算口径（详见 `_context_budget`）。
                         messages = await self._project_over_budget(
                             messages,
                             task,
                             str((task.llm_config or {}).get("model", "") or ""),
+                            mode_cfg,
+                            task.llm_config or {},
                         )
                 else:
                     messages = self._build_history_msgs(task)
@@ -2092,6 +2302,17 @@ class AgentRuntime:
             # 反而永远不触发。给 3 次：足够纠正"做完 2/8 就收工"，又不至于把一次
             # 误判变成无限对拉。
             plan_reminder_budget = 3
+
+            # P0-2：空回合（只有思考、没有正文也没有工具调用）的 nudge 次数上限。
+            #
+            # 模型偶尔会"想到一半就停"：thinking 流里有内容，content 为空，也没有
+            # tool_call。旧逻辑把这段思考直接当最终回答交给用户并标记完成 —— 用户
+            # 看到的是一段像模像样的独白，任务其实一步没动。长任务里这种"假完成"
+            # 比停下来更糟：它不报错、不触发续跑，用户以为结束了。
+            #
+            # 现在改为喂一条 nudge 让它继续。给 2 次：一次纠正"忘了输出"，
+            # 第二次兜住它仍在自我说服的情形；再多就是在跟一个卡住的模型对拉。
+            empty_turn_budget = 2
 
             for turn in range(start_turn, task.max_turns):
                 # 差距C：本轮在**执行图**里的节点 id（llm / tool 调用都挂在它下面）。
@@ -2511,11 +2732,7 @@ class AgentRuntime:
                         )
                     )
                     for call in tool_calls:
-                        notice = (
-                            f"error: output truncated by max_tokens before tool "
-                            f"'{call['name']}' was complete; its arguments may be "
-                            f"incomplete. Re-issue the full tool call."
-                        )
+                        notice = _truncation_notice(call["name"])
                         yield AgentEvent(
                             type="tool_result",
                             tool_call_id=call["id"],
@@ -2620,14 +2837,20 @@ class AgentRuntime:
                                 tool_result = await self._await_answer(call, task)
                         else:
                             # 循环护栏（**执行前**）：重复调用与来回摆动必须在这里拦下 ——
-                            # 放到执行后就晚了，重复的写操作已经落盘。命中即跳过执行，
-                            # 把"你在重复"作为结果回灌，让模型换策略而不是继续烧钱。
+                            # 放到执行后就晚了，重复的写操作已经落盘。
+                            #
+                            # **两级升级**：首次命中只附软警告、照常执行。长任务里合理的
+                            # 重复（轮询构建、等测试、重试网络）若第 3 次就被硬拒，"跑得久"
+                            # 会直接变成"跑不动"；连续命中同一规则才说明警告没被采纳，这时
+                            # 才拒绝执行（`escalated`）。
                             call_verdict = self._loop_guard.observe_call(
                                 call["name"], call.get("arguments")
                             )
-                            if call_verdict.hit:
+                            if call_verdict.hit and call_verdict.escalated:
                                 logger.warning(
-                                    "loop guard: %s (tool=%s)", call_verdict.detail, call["name"]
+                                    "loop guard (escalated): %s (tool=%s)",
+                                    call_verdict.detail,
+                                    call["name"],
                                 )
                                 tool_result = _loop_guard_result(call_verdict)
                             else:
@@ -2645,6 +2868,15 @@ class AgentRuntime:
                                 tool_result = exec_result if exec_result is not None else {}
                                 if self._awaiting_input is None:
                                     executed_ids.add(call["id"])
+                                if call_verdict.hit:
+                                    # 软警告挂在**真实结果**上：模型既拿到执行结果，
+                                    # 又看到"你在重复"的提示，可以自行决定要不要换做法。
+                                    logger.info(
+                                        "loop guard (warn): %s (tool=%s)",
+                                        call_verdict.detail,
+                                        call["name"],
+                                    )
+                                    tool_result = _loop_guard_result(call_verdict, tool_result)
                         batch_results[call["id"]] = tool_result
                         if self._awaiting_input is not None:
                             # M7：这一步在等人 ⇒ 本轮到此为止。后面还没跑的调用不会拿到
@@ -2681,10 +2913,18 @@ class AgentRuntime:
 
                         # 循环护栏（**执行后**）：换了工具/参数，结果却始终一样 → 无进展。
                         # 放在收尾而不是执行处：并发组没有"执行顺序"，统一在这里按原始顺序判定。
+                        #
+                        # 同样两级：首轮只挂警告（结果照常可用），连续无进展才写 `error`。
                         if call["id"] in executed_ids:
                             progress_verdict = self._loop_guard.observe_result(tool_result)
                             if progress_verdict.hit:
-                                logger.warning("loop guard: %s", progress_verdict.detail)
+                                level = "warning" if progress_verdict.escalated else "info"
+                                logger.log(
+                                    logging.WARNING if progress_verdict.escalated else logging.INFO,
+                                    "loop guard (%s): %s",
+                                    level,
+                                    progress_verdict.detail,
+                                )
                                 tool_result = _loop_guard_result(progress_verdict, tool_result)
                                 batch_results[call["id"]] = tool_result
 
@@ -2869,13 +3109,59 @@ class AgentRuntime:
                         msg_kwargs["reasoning_content"] = reasoning_content
                     messages.append(_normalize_msg(**msg_kwargs))
                 elif reasoning_content:
+                    # ── P0-2：只有思考、没有正文也没有工具调用 ⇒ **不当作答案** ──
+                    #
+                    # 这是长任务"假完成"最隐蔽的一种：thinking 流里有内容、content 为空、
+                    # 也没有 tool_call。旧逻辑把这段独白直接塞进 `content=reasoning_content`
+                    # 发给用户并标记完成 —— 用户读到一段像模像样的分析，任务却一步没动，
+                    # 而且不报错、不触发续跑、看板上未完成项还在。
+                    #
+                    # 正确处置是"推它一把"：把"你只输出了思考"作为 user 消息喂回去，
+                    # 让它补上正文或真正开工。预算用尽则**如实标注**后放出思考内容 ——
+                    # 让用户看到空白更糟，但必须让他知道这不是结论。
+                    if empty_turn_budget > 0:
+                        empty_turn_budget -= 1
+                        _answered = False
+                        messages.append(
+                            _normalize_msg(
+                                role="user",
+                                content=(
+                                    "<empty-turn>\n"
+                                    "你上一轮只输出了思考内容，既没有给用户任何正文回答，"
+                                    "也没有调用工具。这不构成一次完成。\n"
+                                    "现在请二选一：\n"
+                                    "1. 如果还有事要做 —— 直接调用工具继续推进；\n"
+                                    "2. 如果确实已经做完 —— 写出面向用户的最终答复"
+                                    "（做了什么、结果如何、还剩什么）。\n"
+                                    "</empty-turn>"
+                                ),
+                            )
+                        )
+                        logger.warning(
+                            "Empty turn (reasoning only, no content/tool calls); nudging "
+                            "(task=%s, turn=%d, remaining=%d)",
+                            task.id,
+                            turn + 1,
+                            empty_turn_budget,
+                        )
+                        continue
+                    # 预算耗尽：仍不发空白，但明确标注这不是结论。
                     _answered = True
-                    # 仅有思考内容（无 content 输出时），将思考内容作为最终回答
-                    msg_kwargs = {"role": "assistant", "content": reasoning_content}
-                    messages.append(_normalize_msg(**msg_kwargs))
+                    messages.append(
+                        _normalize_msg(role="assistant", content=reasoning_content)
+                    )
                     yield AgentEvent(
                         type="text",
-                        content=reasoning_content,
+                        content=(
+                            "[本轮模型只输出了思考，未给出结论或调用工具；"
+                            "以下为它的思考内容]\n\n" + reasoning_content
+                        ),
+                        trace_id=trace_id,
+                    )
+                    yield AgentEvent(
+                        type="error",
+                        error="empty_turn",
+                        trace_id=trace_id,
                     )
 
                 # ── P1-2：清单未完成 ⇒ 不许静默收尾 ──
@@ -3161,6 +3447,68 @@ class AgentRuntime:
 
                 _exc = _sys.exc_info()[1]
                 if isinstance(_exc, (asyncio.CancelledError, GeneratorExit)):
+                    # ── 0-3：**被取消也要落 checkpoint**，否则这一段等于白跑 ──
+                    #
+                    # 取消的产生方有三个，且都不是"任务做完了"：用户点停止、网关的空闲
+                    # 看门狗判定卡死、前端断线导致 SSE 生成器被关闭。此前只有**回合末**
+                    # 落盘，于是被杀掉的那一段里已完成的工具调用（写过的文件、跑过的命令）
+                    # 在下一段续跑时会被**重放** —— 而重放写操作本身就是最贵的错误。
+                    #
+                    # **顺序不能反**：`checkpoint.save` 的 UPDATE 只认
+                    # `status IN ('running','checkpointed','resuming')`，0 命中时会 INSERT
+                    # 一行 `status='running'`。先标终态再落盘，等于把刚收口的 run 重新
+                    # 点成 running，`ux_agent_runs_session_active` 随即让该会话再也提交
+                    # 不了新 run —— 正是本函数要防的那个症状。
+                    #
+                    # 变量一律用 `locals()` 取：`messages` / `done_tool_ids` / `turn` /
+                    # `resumed_*` 都在 try 内、且可能晚于取消点才被赋值。直接引用会在
+                    # finally 里抛 NameError，**顶替**掉真正的取消原因（日志里只剩"变量
+                    # 没赋值"，根因无从查起）—— 这正是本函数早前踩过的坑。
+                    #
+                    # `turn_index` 取 `turn + 1`（把被中断的这一轮也算作已消耗）：宁可少给
+                    # 一轮预算，也不要让"每次都中止在同一轮"的 run 无限续下去。
+                    try:
+                        _abort_msgs = locals().get("messages")
+                        if isinstance(_abort_msgs, list) and _abort_msgs:
+                            _abort_turn_index = (
+                                int(locals().get("turn", -1) or -1) + 1
+                            )
+                            await self._save_checkpoint(
+                                task,
+                                _abort_msgs,
+                                turn_index=_abort_turn_index,
+                                done_tools=list(locals().get("done_tool_ids") or []),
+                                usage={
+                                    "input_tokens": int(
+                                        locals().get("resumed_input_tokens") or 0
+                                    )
+                                    + int(locals().get("total_input_tokens") or 0),
+                                    "output_tokens": int(
+                                        locals().get("resumed_output_tokens") or 0
+                                    )
+                                    + int(locals().get("total_output_tokens") or 0),
+                                    "cached_tokens": int(
+                                        locals().get("resumed_cached_tokens") or 0
+                                    )
+                                    + int(locals().get("total_cached_tokens") or 0),
+                                    "tool_steps": self._tool_steps,
+                                    "wall_seconds": int(
+                                        locals().get("budget").elapsed()
+                                        if locals().get("budget") is not None
+                                        else 0
+                                    ),
+                                },
+                            )
+                            logger.info(
+                                "checkpoint saved on cancel (session=%s turn_index=%d tools=%d)",
+                                getattr(task, "session_id", ""),
+                                _abort_turn_index,
+                                len(list(locals().get("done_tool_ids") or [])),
+                            )
+                    except Exception as e:  # noqa: BLE001 — 落盘失败不该改变退出路径
+                        logger.warning(
+                            "checkpoint on cancel failed (non-blocking): %s", e
+                        )
                     await self._mark_run_status(task, _ckpt.STATUS_CANCELLED)
                 elif _exc is not None:
                     await self._mark_run_status(task, _ckpt.STATUS_FAILED)
@@ -3438,14 +3786,22 @@ class AgentRuntime:
         为真），因此这里不会遇到审批分支 —— 这正是"并发组能安全 `gather`"的依据。
         """
         verdict = self._loop_guard.observe_call(call["name"], call.get("arguments"))
-        if verdict.hit:
-            logger.warning("loop guard: %s (tool=%s)", verdict.detail, call["name"])
+        if verdict.hit and verdict.escalated:
+            # 连续命中才拒绝执行；首次命中照常执行、只把警告挂在结果上（两级升级，
+            # 与串行路径同一套语义）。
+            logger.warning("loop guard (escalated): %s (tool=%s)", verdict.detail, call["name"])
             return _loop_guard_result(verdict)
+        if verdict.hit:
+            logger.info("loop guard (warn): %s (tool=%s)", verdict.detail, call["name"])
         # `allow_approval=False`：并发批**不能交互** —— 组内若出现审批需求（`tool_policy` 的
         # confirm 或 `PreToolUse` hook 的 `ask`），一律降级成**显式错误**返回给模型，
         # 而不是把审批事件丢掉（丢掉就等于"这个调用什么也没发生"）。
         result, _approval = await self._guarded_execute_tool(call, task, allow_approval=False)
-        return result if result is not None else {}
+        out = result if result is not None else {}
+        if verdict.hit:
+            # 软警告必须挂在**真实结果**上，模型才看得到；只打日志等于没提示。
+            out = _loop_guard_result(verdict, out)
+        return out
 
     async def _guarded_execute_tool(
         self, tool_call: dict[Any, Any], task: AgentTask, *, allow_approval: bool = True
@@ -3467,6 +3823,17 @@ class AgentRuntime:
         "什么都没发生"，而并发批的 gather 前提是"组内不产生审批"）。
         """
         tool_name = tool_call["name"]
+
+        def _not_executed() -> None:
+            """标记这次调用**没有真正动手**，撤回它占用的 repeat 计数。
+
+            参数非法 JSON 被拒、并发批无法交互、守卫拒绝 —— 这些都不是"已经在重复
+            做同一件事"，而是"这次压根没做"。若不撤回，模型补全被 `max_tokens`
+            截断的 arguments 再发一次，第 3 次就会被判死循环、连执行机会都没有：
+            护栏反而惩罚了自纠（见 `LoopGuard.observe_skipped`）。
+            """
+            self._loop_guard.observe_skipped(tool_name, tool_call.get("arguments"))
+
         try:
             targs = (
                 json.loads(tool_call["arguments"])
@@ -3477,16 +3844,37 @@ class AgentRuntime:
             # 参数不是合法 JSON：可能是被 max_tokens 截断的半截 arguments。
             # 不用空参数蒙混过关（空参数还会绕过按参数匹配的栅栏规则），直接拒绝，
             # 把错误回灌给模型让它重发完整调用。
-            logger.warning(
-                "Tool %s has invalid JSON arguments (possibly truncated); refusing to execute",
-                tool_name,
-            )
-            return {
-                "error": (
-                    f"Tool '{tool_name}' arguments are not valid JSON (possibly "
-                    f"truncated by max_tokens); not executed — re-issue the tool call"
+            #
+            # 但"直接拒绝"对**只读**工具是过度反应：模型补上缺失的括号再发一次，
+            # 内容一样长、一样会被截断 —— 反复几轮后它只学到"这个工具用不了"。
+            # 这里先用本地机械修复兜底（`_repair_truncated_json`，零额外模型调用）：
+            # 修得出结构就直接执行；修不出或属写类工具，才回灌"照着做"的恢复路径。
+            # 写类工具必须拒绝：`content` / `new_string` 被截断时执行等于把半篇
+            # 内容落盘，毁掉原文件 —— 不可逆，不能靠"大概补全"赌。
+            _repaired: Any | None = None
+            if tool_name in _REPAIRABLE_TOOLS and isinstance(
+                tool_call.get("arguments"), str
+            ):
+                _repaired = _repair_truncated_json(tool_call["arguments"])
+            if _repaired is not None:
+                logger.warning(
+                    "Tool %s had truncated JSON arguments; executed after local repair",
+                    tool_name,
                 )
-            }, None
+                targs = _repaired
+            else:
+                logger.warning(
+                    "Tool %s has invalid JSON arguments (possibly truncated); refusing to execute",
+                    tool_name,
+                )
+                _not_executed()
+                return {
+                    "error": (
+                        f"Tool '{tool_name}' arguments are not valid JSON (possibly "
+                        f"truncated by max_tokens); not executed. "
+                        f"{_truncation_recovery_hint(tool_name)}"
+                    )
+                }, None
         verdict = self._tool_guard.evaluate(tool_name, targs or {}, self._current_mode)
 
         # ── 服务端授权（Tool Broker）：危险工具的判定权威在服务端 ──
@@ -3578,6 +3966,7 @@ class AgentRuntime:
                     assessment.risk_level,
                     assessment.rationale,
                 )
+                _not_executed()
                 return {
                     "error": (
                         f"Tool '{tool_name}' denied by security review: {assessment.rationale}"
@@ -3590,6 +3979,7 @@ class AgentRuntime:
                 # 读级工具本不该走到这里（`requires_confirmation` 只对 write/delete/external
                 # 为真）—— 所以这条是**防御性**的：一旦将来有读级工具被判 confirm，
                 # 也只是报错，而不是静默丢掉一次确认。
+                _not_executed()
                 return {
                     "error": (
                         f"Tool '{tool_name}' requires user confirmation, but it ran inside a "
@@ -4214,9 +4604,28 @@ class AgentRuntime:
         if len(text) <= compactor.INLINE_LIMIT:
             return text
 
+        # 命令上下文：让摘要按**命令族**（测试/git/构建/日志…）走，而不是只看内容形态。
+        # 只有执行类工具的 `command` 参数有意义；解析失败按"没有命令"处理（回落内容形态）。
+        _cmd: str | None = None
+        _raw_args = tool_call.get("arguments")
+        if isinstance(_raw_args, str):
+            try:
+                _parsed_args = json.loads(_raw_args)
+            except (json.JSONDecodeError, TypeError):
+                _parsed_args = None
+        elif isinstance(_raw_args, dict):
+            _parsed_args = _raw_args
+        else:
+            _parsed_args = None
+        if isinstance(_parsed_args, dict):
+            _candidate = _parsed_args.get("command")
+            if isinstance(_candidate, str):
+                _cmd = _candidate
+
         decision = compactor.compact(
             text,
             budget_chars=1500 if compactor.classify(text) == compactor.REF_ONLY else 3000,
+            command=_cmd,
         )
         ref = f"tr_{_uuid.uuid4().hex[:12]}"
         saved = await result_store.store(getattr(task, "session_id", ""), ref, text)

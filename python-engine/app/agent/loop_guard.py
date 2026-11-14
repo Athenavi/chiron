@@ -62,6 +62,12 @@ class LoopVerdict:
     kind: str = ""
     count: int = 0
     detail: str = ""
+    #: 是否为**连续第二次及以后**的命中（两级升级，见模块 docstring）。
+    #:
+    #: 首次命中只附软警告、**仍然执行**：长任务里合理的重复（轮询构建、等测试、
+    #: 重试网络）第 3 次就被硬拒，会让"跑得久"直接变成"跑不动"。连续命中说明
+    #: 警告没被采纳，这时才拒绝执行。
+    escalated: bool = False
 
     @property
     def hit(self) -> bool:
@@ -98,8 +104,30 @@ class LoopGuard:
         self._oscillation_threshold = max(0, oscillation_threshold)
         self._calls: deque[str] = deque(maxlen=WINDOW)
         self._results: deque[str] = deque(maxlen=WINDOW)
+        #: 上一次命中的规则名，**按轨道分开记**：调用侧（repeat/oscillation）与
+        #: 结果侧（no_progress）交替发生，共用一个字段会互相清零 —— 那样"连续命中"
+        #: 几乎永远凑不齐，升级等于没实现。
+        self._last_call_hit: str = ""
+        self._last_result_hit: str = ""
 
     # ── 观测 ──
+
+    def _escalate(self, verdict: LoopVerdict, *, track: str) -> LoopVerdict:
+        """标记"连续命中"并更新该轨道状态。
+
+        首次命中返回软警告（`escalated=False`，调用方应**仍然执行**，只附提示）；
+        同一规则连续命中则 `escalated=True`，调用方才拒绝执行。
+
+        为什么按 `kind` 而不是按次数计数：模型换个做法但仍原地打转（repeat →
+        oscillation）时，那不是"没听劝"而是"没走通"，继续软警告才对。
+        """
+        attr = "_last_call_hit" if track == "call" else "_last_result_hit"
+        if not verdict.hit:
+            setattr(self, attr, "")
+            return verdict
+        verdict.escalated = verdict.kind == getattr(self, attr)
+        setattr(self, attr, verdict.kind)
+        return verdict
 
     def observe_call(self, tool_name: str, args: Any) -> LoopVerdict:
         """登记一次工具调用，返回是否命中 repeat / oscillation。
@@ -108,7 +136,9 @@ class LoopGuard:
         —— 调用点就不必先解析一遍。
         """
         self._calls.append(self._call_key(tool_name, args))
-        return self._detect_repeat() or self._detect_oscillation()
+        return self._escalate(
+            self._detect_repeat() or self._detect_oscillation(), track="call"
+        )
 
     def _call_key(self, tool_name: str, args: Any) -> str:
         """归一化调用指纹；`observe_call` / `observe_skipped` 必须用同一份。"""
@@ -145,11 +175,13 @@ class LoopGuard:
     def observe_result(self, result: Any) -> LoopVerdict:
         """登记一次工具结果，返回是否命中 no_progress。"""
         self._results.append(_result_digest(result))
-        return self._detect_no_progress()
+        return self._escalate(self._detect_no_progress(), track="result")
 
     def reset(self) -> None:
         self._calls.clear()
         self._results.clear()
+        self._last_call_hit = ""
+        self._last_result_hit = ""
 
     # ── 判定 ──
 

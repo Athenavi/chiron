@@ -26,6 +26,16 @@ const (
 	// 而 checkpoint 续跑又被夹到 `max_turns-1`，整套续跑基建等于作废。
 	// 长任务需要的是"预算到限才停"，不是"轮数到限就停"。
 	DefaultMaxTurns = 50
+	// LongTurnCeiling 长任务回合的**兜底**总时长，不是判据。
+	//
+	// 回合"该不该继续"由引擎侧预算三轴（`AGENT_RUN_MAX_TOKENS` / `AGENT_MAX_STEPS` /
+	// `AGENT_MAX_SECONDS`）和 `submitOnce` 的空闲看门狗决定 —— 它们知道"这一轮在做什么"。
+	// 网关只保留一个足够大的兜底，防止泄漏的 goroutine 永久占着租户槽位与信号量。
+	//
+	// **不要**把 `DefaultAgentTimeout` 当总时长用：它是"连续多久没事件才判定卡死"的
+	// 空闲窗口。拿它当总时长，正常的长任务（几十轮工具调用本来就要跑十几分钟）
+	// 必然在 300s 被拦腰砍断，并连带取消该会话的后台子 Agent。
+	LongTurnCeiling = 2 * time.Hour
 	// DefaultMaxOutputTokens 单次 LLM 调用的默认 max output tokens。
 	//
 	// M20：它不是 run 预算 —— run 全程的 token 上限在引擎侧（`AGENT_RUN_MAX_TOKENS`）。

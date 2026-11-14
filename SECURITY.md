@@ -2,10 +2,9 @@
 
 ## 报告漏洞
 
-**不要开公开 issue。** 优先走私有渠道：
+**不要开公开 issue。** 请走私有渠道：
 
-1. **GitHub Security Advisories**（推荐）：仓库 → Security → *Report a vulnerability*
-2. 或邮件：`security@example.com`（维护者替换为真实地址）
+**GitHub Security Advisories**（唯一渠道）：仓库 → Security → *Report a vulnerability*
 
 报告请包含：受影响的版本或 commit、复现步骤、影响面（越权 / 数据泄露 / RCE / 密钥泄漏…），
 以及你认为**被突破的是哪一条信任边界**（认证、租户隔离、执行隔离、内部服务互信）。

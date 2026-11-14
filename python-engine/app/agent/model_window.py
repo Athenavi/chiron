@@ -31,8 +31,14 @@ WINDOW_CACHE_TTL_SECONDS = 300
 #: 而现代模型窗口普遍 ≥128K。真正的小窗口模型应当在 `llm_models.context_window`
 #: 里如实登记 —— 那是数据问题，不该用"给所有人一个极小兜底"来掩盖。
 DEFAULT_CONTEXT_WINDOW = 128000
-#: 查不到输出上限时的回落值（与 `settings.default_max_tokens` 同值，保持历史行为）
-DEFAULT_MAX_OUTPUT_TOKENS = 4096
+#: 查不到输出上限时的回落值（与 `settings.default_max_tokens` 同值，保持同一口径）
+#:
+#: 旧值 4096 是"整篇 write_file 被截断"的直接上游根因：一次调用吐不满 4k token 时，
+#: 模型产出的 arguments 会在 JSON 中间被切断 → 参数非法 → 工具拒绝执行 → 重试又重演，
+#: 长任务因此反复烧轮次却推不动。现代模型普遍支持 8k 以上输出，4096 只在旧模型才合理，
+#: 而那种情况应当在 `llm_models.max_output_tokens` 里如实登记（数据问题，不该用
+#: "给所有人一个极小兜底"来掩盖）。
+DEFAULT_MAX_OUTPUT_TOKENS = 8192
 #: 输出上限的下限。管理端填 1 会让模型一个字都说不完；低于此值按未知处理。
 MIN_MAX_OUTPUT_TOKENS = 256
 #: 触发压缩的窗口占比（与 deepagents 的 `fraction` 档对齐，便于横向调参）

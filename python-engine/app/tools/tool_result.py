@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from app.agent.result_store import RESULT_TTL_SECONDS
 from app.tools.context import get_session_id
 from app.tools.registry import registry
 
@@ -41,7 +42,8 @@ async def read_tool_result(
         return {
             "error": (
                 f"result not found or expired: {ref}"
-                "（工具结果只保存 2 小时；过期后需要重新执行原操作）"
+                f"（工具结果保存 {RESULT_TTL_SECONDS // 3600} 小时；"
+                "过期后改用 read_archive 按消息 id 取回，或重新执行原操作）"
             )
         }
     return {

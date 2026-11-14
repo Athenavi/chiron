@@ -83,6 +83,48 @@ def test_verdict_is_falsy_when_no_hit():
     assert verdict.hit is False
 
 
+# ── "未执行"不算 repeat（observe_skipped）─────────────────────────────
+#
+# 实测场景：write_file 的 arguments 被 max_tokens 截断 → 参数非法 JSON → 拒绝执行
+# → 模型补全后重发。第 3 次会被 repeat 判死循环，连执行机会都没有：护栏反过来
+# 惩罚了自纠。未动手的调用不该占用 repeat 计数。
+
+
+def test_skipped_calls_do_not_accumulate_repeat():
+    g = LoopGuard()
+    args = '{"path": "a", "content": "x"}'
+    for _ in range(5):
+        g.observe_call("write_file", args)
+        g.observe_skipped("write_file", args)
+    # 每次都被撤回，永远攒不到 3 条相同记录
+    assert g.observe_call("write_file", args).hit is False
+
+
+def test_repeat_still_fires_for_actually_executed_calls():
+    # 撤回只对"未执行"生效：真执行过的重复调用照旧被拦（否则护栏形同虚设）
+    g = LoopGuard()
+    args = {"path": "a"}
+    g.observe_call("read_file", args)
+    g.observe_call("read_file", args)
+    verdict = g.observe_call("read_file", args)
+    assert verdict.kind == REPEAT
+
+
+def test_observe_skipped_only_withdraws_matching_tail():
+    # 并发批里多个调用交错登记：只弹最后一条且指纹相同的，不碰别人的记录
+    g = LoopGuard()
+    g.observe_call("read_file", {"path": "a"})
+    g.observe_call("grep_files", {"query": "x"})
+    assert g.observe_skipped("read_file", {"path": "a"}) is False
+    # 不匹配时队列不变，`grep_files` 那条仍在
+    assert g.observe_skipped("grep_files", {"query": "x"}) is True
+
+
+def test_tool_skipped_reported():
+    g = LoopGuard()
+    assert g.observe_skipped("grep_files", {"query": "x"}) is False
+
+
 def test_hint_states_the_count():
     g = LoopGuard()
     verdict = None

@@ -2,13 +2,15 @@
 
 两条独立的坑，各自钉一条用例：
 
-1. **接线**：`SkillStore` 的搜索路径末尾必须真的挂上内置源，且 `market/skills/` 下每个
-   目录型技能都要被加载 —— 有一个 SKILL.md 非法就会被 `SkillStore` 跳过（只留一条
-   `_warnings`），模型于是悄悄少一个技能。
+1. **接线**：`SkillStore` 的搜索路径末尾必须真的挂上内置源，且源目录下每个目录型技能
+   都要被加载 —— 有一个 SKILL.md 非法就会被 `SkillStore` 跳过（只留一条 `_warnings`），
+   模型于是悄悄少一个技能。
 2. **缺失可见**：源不存在时 `builtin_skills_root()` 返回 `None`（不能抛，内置源缺失不该
    让技能列表报错），但**必须告警**。此前它是静默的，正好掩盖了部署缺陷：引擎镜像只
-   `COPY app/`，`market/skills/` 进不了镜像 ⇒ 容器里恒无内置技能而无人察觉
-   （见 vendor/规划.md §1.3）。
+   `COPY app/`，技能资产进不了镜像 ⇒ 容器里恒无内置技能而无人察觉。
+
+公开仓库**不随附**技能资产（`market/skills/` 不入库）：内置源是否存在取决于部署方是否
+挂载。因此「仓库检出下必须有」不是断言，真正要钉的是「存在则必须全部加载」。
 """
 from __future__ import annotations
 
@@ -23,20 +25,28 @@ def _builtin_names() -> set[str]:
 
 
 def test_repo_checkout_resolves_builtin_source():
+    """仓库检出下若放了技能资产，必须能解析出来。
+
+    公开仓库不随附 `market/skills/`，所以这里不做「必须存在」的断言 —— 部署方挂载了
+    资产时才校验解析结果，避免把「未挂载」误判成缺陷。
+    """
     root = skillmd.builtin_skills_root()
-    assert root is not None, "仓库检出下必须能解析出 market/skills（否则内置技能全丢）"
+    if root is None:
+        return
     assert root.is_dir() and root.name == "skills"
 
 
 def test_every_market_skill_dir_is_loaded():
-    """`market/skills/` 里每个含 SKILL.md 的目录都必须出现在技能列表里。
+    """源目录里每个含 SKILL.md 的目录都必须出现在技能列表里。
 
     这条比"至少有内置技能"更精确：它能抓到「某个 SKILL.md 写坏了被静默跳过」。
     """
     root = skillmd.builtin_skills_root()
-    assert root is not None
+    if root is None:
+        return
     dirs = skillmd.iter_skill_dirs(root)
-    assert dirs, "market/skills 下应有目录型技能（SKILL.md）"
+    if not dirs:
+        return  # 目录存在但没有任何技能（公开仓库的默认状态：只有 .gitkeep）
 
     loaded = _builtin_names()
     missing = sorted(d.name for d in dirs if d.name not in loaded)

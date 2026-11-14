@@ -274,9 +274,11 @@ func (d *takeoverDriver) driveOne(ctx context.Context, id, sessionID, userID str
 		return
 	}
 
+	// 与 `thread_turn.go` 同一条口径：外层只是**兜底**，判据在 `submitOnce` 的
+	// 空闲看门狗（连续无事件才判卡死）。用 300s 空闲窗口当总时长会砍掉正常长任务。
 	timeout := d.submitTimeout
-	if timeout < DefaultAgentTimeout {
-		timeout = DefaultAgentTimeout
+	if timeout < LongTurnCeiling {
+		timeout = LongTurnCeiling
 	}
 	// 回合必须脱离扫描上下文：响应一返回扫描就结束，回合还在跑。
 	runCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)

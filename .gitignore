@@ -97,6 +97,10 @@ sandbox/
 # 定位含混。需要共享其中内容时，请把**提炼后的结论**写进 docs/，而不是把原文搬进仓库。
 /vendor/
 
+# 竞品源码级调研（逐文件行号对标 OpenHands / Cline / Aider 等）：属内部调研素材，
+# 不随仓库分发。结论已提炼进 docs/architecture.md 与代码注释。
+/docs/research/
+
 # ── 第三方参考源码 ──
 # 这里原先逐文件列出了 /third/DeepSeek-Reasonix-main-v2/ 的 6604 个路径
 # （该目录已不在工作区），使本文件膨胀到 6677 行 / 504KB。

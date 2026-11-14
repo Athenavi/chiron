@@ -43,7 +43,8 @@
 
 ## 执行
 
-可向维护者举报滥用、骚扰或其他不可接受的行为：`conduct@example.com`（维护者替换为真实地址）。
+可向维护者（[@Athenavi](https://github.com/Athenavi)）举报滥用、骚扰或其他不可接受的行为。
+公开渠道不便说明时，请用 GitHub 的私信或走 [SECURITY.md](SECURITY.md) 的私有渠道。
 
 所有投诉都会被**及时且公平**地审查与调查。维护者有义务尊重举报者的隐私与安全。
 

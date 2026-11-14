@@ -32,7 +32,7 @@
 后两条 ⇒ 想统一调层级或节奏时得逐处找。
 
 > **没有守卫的（如实写明，别以为门禁绿就万事大吉）**：
-> ① `prefers-reduced-motion` 的降级 —— `check-motion-tokens` 只管**时长字面量**，不管有没有写这条 media query；
+> ① 时长字面量之外的动效问题（如漏写 `prefers-reduced-motion` 降级）；
 > ② **对比度**；③ **`!important` 的数量**。这三项**只靠评审**。
 
 ## 3. 相邻知识在哪

@@ -244,9 +244,15 @@ func launchThreadTurn(parent context.Context, deps threadTurnDeps, d threadDeliv
 	prep preparedThreadTurn, res threadTurnResources) bool {
 	base := context.WithoutCancel(parent)
 
+	// 外层只是**兜底**，不是"这一轮该跑多久"的判据。
+	//
+	// 判据在 `submitOnce` 的空闲看门狗：只要引擎还在产出事件就续命，连续无事件
+	// 才判定卡死。这里若用 `DefaultAgentTimeout`（300s，那是**空闲窗口**）当总时长，
+	// 正常的长任务（几十轮工具调用本就要跑十几分钟）必然被拦腰砍断 —— 队列里的
+	// 后续投递也跟着一起死。
 	timeout := deps.submitTimeout
-	if timeout < DefaultAgentTimeout {
-		timeout = DefaultAgentTimeout
+	if timeout < LongTurnCeiling {
+		timeout = LongTurnCeiling
 	}
 	runCtx, cancel := context.WithTimeout(base, timeout)
 	runCtx = WithQuotaReserve(runCtx, res.reserved)

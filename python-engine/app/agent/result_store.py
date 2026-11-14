@@ -14,8 +14,16 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-#: 结果原文保存时长（秒）—— 与会话的自然生命周期对齐
-RESULT_TTL_SECONDS = 2 * 60 * 60
+#: 结果原文保存时长（秒）。
+#:
+#: 旧值 2 小时（`2 * 60 * 60`）与"长任务"这个前提相冲突：一个跨夜或跑上几小时的任务，
+#: 中途压缩掉的工具原文在下一次续跑时就已经过期 —— 模型手里只剩 `result_ref`，
+#: 取回却拿到 `None`，表现为"引用还在、内容没了"，比一开始就没存更让人困惑。
+#:
+#: 取 24 小时，与 `job_runner.JOB_RESULT_TTL` 对齐（后台任务结果也是这个量级）：
+#: 长任务通常在同一工作日内完成，跨天则应该走 `read_archive` 的 **PG 长期通道**
+#: （`messages` 持久表，见 `app/tools/archive.py`）—— 这里不需要再存更久。
+RESULT_TTL_SECONDS = 24 * 60 * 60
 
 
 def _key(session_id: str, ref: str) -> str:

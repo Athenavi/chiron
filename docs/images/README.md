@@ -22,14 +22,15 @@ README 首屏要回答三个问题：**它长什么样、我能用它做什么�
 ## 命名与引用
 
 - 全部放在本目录，文件名用上表的名字（不要用 `1.png`、`屏幕截图 2026-11-04.png`）。
-- README 首屏的引用**默认被 HTML 注释包住**，因为图片还没入库；放好文件后取消注释即可：
+- 图片入库后，在 README 首屏标题下方插入引用：
 
 ```html
-<!-- 首屏截图：放到 docs/images/ 后取消下面两行的注释（见 docs/images/README.md 的规格）。
-     放在注释里而不是直接引用，是因为图片文件还没入库 —— 直接引用会在 GitHub 上显示破图。
-![Chiron 对话界面：过程可见的 Agent 运行](docs/images/screenshot-chat.png)
--->
+<p align="center">
+  <img src="docs/images/screenshot-chat.png" alt="Chiron 对话界面：过程可见的 Agent 运行" width="900">
+</p>
 ```
+
+文件未入库前**不要**写进 README —— GitHub 会显示破图。
 
 ## 录制纪律（重要）
 

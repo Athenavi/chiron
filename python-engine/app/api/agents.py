@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING, Any
 from fastapi import APIRouter
 from pydantic import BaseModel
 
+from app.config import settings
+
 if TYPE_CHECKING:  # 仅注解用；运行期在函数内延迟导入（避免 runtime ↔ api 的导入环）
     from app.agent.runtime import ApprovalDecision
 
@@ -26,7 +28,8 @@ class AgentDispatchRequest(BaseModel):
     tools: list[dict[str, Any]] = []
     model: str = ""
     max_turns: int = 50
-    max_tokens: int = 4096
+    #: 0 = 未指定 ⇒ 用 `settings.default_max_tokens`（避免各处再硬编码一个偏小的值）
+    max_tokens: int = 0
     temperature: float = 0.7
     tenant_id: int = 0
     user_id: str = ""
@@ -80,7 +83,7 @@ async def dispatch_agent(body: AgentDispatchRequest) -> dict[str, Any]:
             gateway=gateway,
             model=body.model or "deepseek-chat",
             max_turns=body.max_turns or 50,
-            max_tokens=body.max_tokens or 4096,
+            max_tokens=body.max_tokens or settings.default_max_tokens,
             temperature=body.temperature or 0.7,
         )
         result = await agent.run(

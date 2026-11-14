@@ -140,7 +140,8 @@
 | RPA 插件桥 | `GET /ws/rpa` | **全站唯一的 WebSocket**（`internal/api/rpa_ws.go`，nginx `location /ws/`）；对话流**不用** WS |
 | 公开分享 | `GET /v1/share/{id}`、`GET /media/s/{assetID}` | 仅 `rlMW`，无登录；内容由分享记录限定，且 `expires_at` 必须未过期（缺失/过期 ⇒ 410）；媒体侧走 S3 预签名 URL |
 
-> 会话流统一为 SSE 是有意为之：`gateway_router.go` 在注册 `/events` 的注释里写明"批 B-3′：下线 /ws/{sessionId} 与 WebSocketHub（前端仅 EventSource）；RPA 插件通道 /ws/rpa 保留"。
+> 会话流统一为 SSE 是有意为之：`gateway_router.go` 在注册 `/events` 的注释里写明下线
+> `/ws/{sessionId}` 与 WebSocketHub（前端仅 EventSource）；RPA 插件通道 `/ws/rpa` 保留。
 
 ## 4. 凭证与信任边界
 
