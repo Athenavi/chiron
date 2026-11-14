@@ -230,47 +230,6 @@ async def skill_generate(
     return result
 
 
-#: 技能名合法形态（与 `skill_install` 的校验同一口径）。
-#: 远端索引是**第三方数据**，其中的 name 会进文件路径（`/skills/<name>/SKILL.md`），
-#: 不校验就等于把路径注入交给远端决定。
-_SKILL_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
-
-
-def _local_skill_rows() -> dict[str, dict[str, Any]]:
-    """本地已安装技能 → `{name: 统一行}`。远端条目据此标 `installed`。"""
-    rows: dict[str, dict[str, Any]] = {}
-    for s in _get_store().list():
-        rows[s.name] = {
-            "name": s.name,
-            "description": s.description,
-            "version": s.version,
-            "author": s.author,
-            "source": s.source,
-            "installed": True,
-        }
-    return rows
-
-
-def _row_from_registry(item: Any, installed: set[str]) -> dict[str, Any] | None:
-    """远端索引的一条 → 统一行；name 不合法或非对象则丢弃。
-
-    丢弃而非抛错：一个索引里混进几条坏数据是常态，不该让整次发现失败。
-    """
-    if not isinstance(item, dict):
-        return None
-    name = str(item.get("name") or "").strip()
-    if not _SKILL_NAME_RE.match(name):
-        return None
-    return {
-        "name": name,
-        "description": str(item.get("description") or ""),
-        "version": str(item.get("version") or ""),
-        "author": str(item.get("author") or ""),
-        "source": str(item.get("source") or ""),
-        "installed": name in installed,
-    }
-
-
 async def skill_discover(url: str = "") -> dict[str, Any]:
     """发现可用技能：本地已安装 + 远端索引（合并去重、按上限截断）。
 
@@ -285,36 +244,22 @@ async def skill_discover(url: str = "") -> dict[str, Any]:
       清单。运维把默认源配错，不该让"已装了什么"这个有效信息也一起消失。
     """
     from app.config import settings
+    from app.skill.discover import merge_registry, render_lines
 
     explicit = bool(url and url.strip())
-    local = _local_skill_rows()
-    installed = set(local)
+    store = _get_store()
     target = (url or settings.skill_registry_url or "").strip()
+    limit = max(1, int(settings.skill_registry_max_items or 50))
     warnings: list[str] = []
 
     if not target:
-        rows = list(local.values())
+        result = merge_registry(store, [], limit=limit)
     else:
         try:
             payload = await _fetch_skill_json(target)
             if not isinstance(payload, list):
                 raise ValueError("remote skill index must be a JSON array")
-            limit = max(1, int(settings.skill_registry_max_items or 50))
-            # 本地排前面：已装的技能最相关，且同名时保留本地那条（installed=True）。
-            rows = list(local.values())
-            seen = set(local)
-            omitted = 0
-            for item in payload:
-                row = _row_from_registry(item, installed)
-                if row is None or row["name"] in seen:
-                    continue
-                if len(rows) >= limit:
-                    omitted += 1
-                    continue
-                rows.append(row)
-                seen.add(row["name"])
-            if omitted:
-                warnings.append(f"{omitted} more remote entries omitted (limit {limit})")
+            result = merge_registry(store, payload, limit=limit, origin=target)
         except Exception as e:
             # 显式传入的 url 失败必须**明确报错**，不能降级成 warning：
             # SSRF 拦截（内网地址）若只表现为"结果正常 + 一条提示"，就成了可以不
@@ -324,14 +269,12 @@ async def skill_discover(url: str = "") -> dict[str, Any]:
                 return {"error": f"discover remote failed: {e}"}
             # 默认源（后台配置）失败才回落：运维配错不该让本地清单也不可用。
             warnings.append(f"remote discover failed, showing local only: {e}")
-            rows = list(local.values())
+            result = merge_registry(store, [], limit=limit)
 
-    lines = [
-        f"  [{'✓' if r['installed'] else ' '}] {r['name']}: {r['description']} (v{r['version']})"
-        for r in rows
-    ]
+    rows = result.rows
+    warnings.extend(result.warnings)
     out: dict[str, Any] = {
-        "output": f"Available skills ({len(rows)})\n" + "\n".join(lines),
+        "output": f"Available skills ({len(rows)})\n" + render_lines(rows),
         "count": len(rows),
         "results": rows,
     }

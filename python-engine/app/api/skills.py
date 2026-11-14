@@ -323,47 +323,54 @@ async def run_skill(
 async def discover_skills(
     url: str = "", user_id: str = "", tenant_id: int = 0
 ) -> dict[str, Any]:
-    store = _store_for(user_id, tenant_id)
-    results: list[dict[str, Any]] = []
+    """发现技能：本地已装 + 远端索引。
 
-    if url:
+    与工具链的 `skill_discover` **共用** `app.skill.discover` 的合并口径
+    （本地优先、同名去重、按上限截断、技能名强校验）。
+
+    修复前这里把远端索引的结果也塞进 ``local`` 桶，``remote`` 恒为 ``[]`` ——
+    "发现"能力从 API 侧看等于不存在。现在按 ``installed`` 正确分桶。
+
+    失败语义与工具链一致：显式传入 ``url`` 失败 → 500（SSRF 拦截必须可见，
+    否则成为不报错的盲探测通道）；回落到默认源失败 → 返回本地清单 + ``warnings``。
+    """
+    from app.config import settings
+    from app.skill.discover import merge_registry
+
+    store = _store_for(user_id, tenant_id)
+    explicit = bool(url and url.strip())
+    target = (url or settings.skill_registry_url or "").strip()
+    limit = max(1, int(settings.skill_registry_max_items or 50))
+    warnings: list[str] = []
+    payload: list[Any] = []
+
+    if target:
         try:
-            from app.config import settings
             from app.http_client import shared_client
 
             async with shared_client(timeout=settings.http_timeout_default) as client:
-                # SSRF 防护：同 install_skill —— url 由调用方控制，须走解析级校验。
+                # SSRF 防护：url 可能由调用方控制，须走解析级校验（含重定向）。
                 from app.tools.ssrf import fetch_url_safe
 
-                resp = await fetch_url_safe(client, url)
+                resp = await fetch_url_safe(client, target)
                 resp.raise_for_status()
-                items = resp.json()
-                installed_names = {s.name for s in store.list()}
-                for item in items:
-                    name = item.get("name", "")
-                    results.append(
-                        {
-                            "name": name,
-                            "description": item.get("description", ""),
-                            "version": item.get("version", ""),
-                            "author": item.get("author", ""),
-                            "source": item.get("source", url),
-                            "installed": name in installed_names,
-                        }
-                    )
+                data = resp.json()
+            if not isinstance(data, list):
+                raise ValueError("remote skill index must be a JSON array")
+            payload = data
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"discover remote failed: {e}") from e
-    else:
-        for s in store.list():
-            results.append(
-                {
-                    "name": s.name,
-                    "description": s.description,
-                    "version": s.version,
-                    "author": s.author,
-                    "source": s.source,
-                    "installed": True,
-                }
-            )
+            if explicit:
+                raise HTTPException(
+                    status_code=500, detail=f"discover remote failed: {e}"
+                ) from e
+            warnings.append(f"remote discover failed, showing local only: {e}")
 
-    return {"local": results, "remote": []}
+    result = merge_registry(store, payload, limit=limit, origin=target)
+    warnings.extend(result.warnings)
+
+    local_rows = [r for r in result.rows if r["installed"]]
+    remote_rows = [r for r in result.rows if not r["installed"]]
+    out: dict[str, Any] = {"local": local_rows, "remote": remote_rows}
+    if warnings:
+        out["warnings"] = warnings
+    return out
