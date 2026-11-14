@@ -339,8 +339,12 @@ func (r *runUsageReconciler) settleOnce(ctx context.Context, row runUsageRow) st
 	}
 
 	// 钱已经扣了：从这里开始**不能**让水位倒退，否则下一轮会再扣一次。
+	//
+	// cached 必须与上面 DeductTokens 传同一个值：DeductTokens 按缓存价计费，
+	// 而这条记录喂给成本中心明细。传 0 会让"明细按全价、扣费按折扣价"两处账
+	// 各说各话 —— 对账时看到的差额其实是自己造的。
 	if err := r.biller.RecordTokenUsage(ctx, userID, row.SessionID,
-		int(deltaIn), int(deltaOut), 0, key); err != nil {
+		int(deltaIn), int(deltaOut), int(cachedDelta), key); err != nil {
 		slog.Warn("run usage reconcile: billing record failed (credit already deducted)",
 			"run", row.RunID, "user", userID, "error", err)
 	}
