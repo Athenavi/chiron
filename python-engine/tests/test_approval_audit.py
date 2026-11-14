@@ -154,7 +154,7 @@ def test_write_failure_does_not_raise(tmp_path: Path, monkeypatch: pytest.Monkey
 
 
 def test_all_audit_modules_share_one_timestamp_helper():
-    """三份流水的 ts 必须来自同一处 —— 否则又会各写一份（见 vendor/规划.md §4）。"""
+    """三份流水的 ts 必须来自同一处 —— 否则又会各写一份。"""
     from app.agent import approval_audit
     from app.audit_log import utc_timestamp
     from app.hooks import audit as hooks_audit

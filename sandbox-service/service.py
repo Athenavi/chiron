@@ -21,10 +21,10 @@ POST /v1/internal/exec/run      -> {"stdout","stderr","exit_code","truncated"}
 （`run_in_sandbox` 的审计从工具上下文取身份）；不带就是空身份 —— 那等于"记下了执行、
 记不下人"，所以引擎侧客户端应当传（见 `app/backends/remote_exec.py`）。
 
-## 部署边界（服务应用之外的必做项，见 vendor/规划.md §5.3）
+## 部署边界（服务应用之外的必做项）
 
 无状态 · 最小权限 · **不挂可写宿主路径** · **不与引擎共容器** · 只在内网可达 ·
-自己的 `SANDBOX_ROOT`（独立卷）。
+自己的 `SANDBOX_ROOT`（独立卷）。这六条**不在代码里**，漏掉任何一条都会让"隔离"名存实亡。
 """
 
 from __future__ import annotations

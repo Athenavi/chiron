@@ -11,7 +11,7 @@ run_in_background / job_output / job_kill / persistent_shell 都曾因此不存�
 排查方法：``python -c "import app.tools; from app.tools.registry import registry; print(sorted(registry.list_names()))"``
 
 ⚠️ 不要把注册清单复制到别处（``app/main.py`` 曾经另有一份、且两份都不完整，
-于是"哪些工具存在"取决于从哪个入口 import —— 见 vendor/规划.md §4 的"注册 ≠ 可见"）。
+于是"哪些工具存在"取决于从哪个入口 import —— 见"注册 ≠ 可见"）。
 
 ⚠️ **沙箱子进程的短路开关**（``CHIRON_TOOLS_SKIP_REGISTRY=1``）：上面那串注册 import 是
 **eager** 的，而 ``app/tools/_sandbox_worker.py`` 被 ``run_code`` 以 ``python -m

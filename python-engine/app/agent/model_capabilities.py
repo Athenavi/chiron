@@ -1,6 +1,6 @@
 """模型能力（模态）—— 以**接口的实际反馈**为准，而不是静态预设。
 
-对齐 Reasonix 的两条判据（见 `vendor/DeepSeek-Reasonix/REASONIX.md` 的 *Curated presets*）：
+对齐两条既有判据（*Curated presets* 的思路）：
 **声明优先于猜测**，模型名只是最后手段 —— 因为同一个名字在不同网关下能力可以不同
 （自建 one-api 转发的 `deepseek` 与官方端点不必一致）。
 

@@ -315,7 +315,7 @@ class ServiceManager:
 
         try:
             # -mod=mod：排除 vendor 目录判定。本仓库的 vendor/ 下放的是参考源码
-            # （vendor/DeepSeek-Reasonix），没有 Go 依赖清单 vendor/modules.txt，
+            # 没有 Go 依赖清单 vendor/modules.txt，
             # 而 Go 只要看到 vendor 目录就会按 vendor 模式做一致性检查并直接报错
             # （inconsistent vendoring）。显式指定 -mod 后改走 module cache。
             result = subprocess.run(

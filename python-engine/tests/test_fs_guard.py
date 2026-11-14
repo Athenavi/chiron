@@ -47,7 +47,7 @@ class TestFsGuard:
 class TestStrictMode:
     """严格模式（`fs_require_observation=True`）—— 开关**默认关**，故这些用例显式打开。
 
-    对应 `vendor/规划.md` §3.3 的待决问题：是否要求"写已存在但从未读过的文件"也先读。
+    对应一处待决问题：是否要求"写已存在但从未读过的文件"也先读。
     机制先就绪（默认零行为变化），要不要开由产品决定。
     """
 

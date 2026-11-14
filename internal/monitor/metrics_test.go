@@ -10,7 +10,7 @@ import (
 // ③ 会话成本表的容量淘汰与 TTL 过期。
 //
 // ⚠ 包级状态（Global / 环形缓冲 / maxSessionCosts / sessionCostTTL）是全局的，
-// 每个用例都必须**先快照、后还原**（否则污染同进程的其它用例 —— 见 vendor/规划.md §4）。
+// 每个用例都必须**先快照、后还原**（否则污染同进程的其它用例）。
 
 func snapshotCostState() (map[string]*SessionCostWithTTL, []string, int, int, int, time.Duration) {
 	buf := make([]string, len(sessionCostRing))

@@ -89,7 +89,7 @@ def test_narrowing_semantics_are_distinct(value: list[str] | None):
 def test_tool_schema_exposes_call_tools():
     """`call_tools` 必须在委派工具的 parameters 里 —— 否则模型看不见，能力等于不存在。
 
-    同族教训（`vendor/规划.md` §4）：`media_create` 曾"注册了但不在 `CORE_TOOL_NAMES`"，
+    同族教训：`media_create` 曾"注册了但不在 `CORE_TOOL_NAMES`"，
     于是模型绕道写宿主路径 —— **"有工具" ≠ "模型知道有这个工具"**。
     """
     from app.tools.registry import registry

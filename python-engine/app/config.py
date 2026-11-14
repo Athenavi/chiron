@@ -361,7 +361,7 @@ class Settings(BaseSettings):
     # Service，集群内任何 Pod 都能直连 8000，靠"端口不外露"是部署假设而不是保证。
     metrics_token: str = ""
 
-    # ── 独立 sandbox 服务（S5-(e)，见 vendor/设计-独立sandbox服务.md）──
+    # ── 独立 sandbox 服务（独立执行面）──
     #
     # `service`（**默认**）：执行转发给独立服务（`app/backends/remote_exec.py`），把 agent
     # 生成的命令 / Python 代码从引擎进程挪到**受限容器**里跑（只读根、无 capability、
@@ -404,7 +404,7 @@ class Settings(BaseSettings):
     #: 交给 provider。用例：`tests/test_fs_guard.py::TestStrictMode`。
     fs_require_observation: bool = False
 
-    # ── 子 Agent 的「继续 / 分叉」（R5(b)，见 vendor/规划.md §3.5）──
+    # ── 子 Agent 的「继续 / 分叉」（R5(b)）──
     #
     # 默认**关**：它让模型能"带着某个子 Agent 已记录的步骤继续跑（或从某一步分叉）"，
     # 是要显式开启的新能力（§1.3：会改变行为的机制一律默认关）。
@@ -412,13 +412,13 @@ class Settings(BaseSettings):
     # **明确的"未启用"错误**，且不写 `subagent_runs.resumed_from` / `resume_at_step`。
     subagent_resume_enabled: bool = False
 
-    # ── 子 Agent 的宿主证据（host receipts，见 vendor/规划.md §3.5 的 R1）──    #
+    # ── 子 Agent 的宿主证据（host receipts，R1）──    #
     # 默认开：委派的价值就在**可信度** —— 父模型看到的 `summary` 是子 Agent 的自述，而收据是
     # **宿主观测**（工作区差分 + 执行计数），追加在摘要之后。
     # 关掉它会退回"只信自述"的旧行为（成本：执行前后各拍一次**有界**工作区快照）。
     subagent_host_receipts: bool = True
 
-    # ── 子 Agent 写路径仲裁（R2，见 vendor/规划.md §3.5）──
+    # ── 子 Agent 写路径仲裁（R2）──
     #
     # 默认**关**：开启它会让"可写的子 Agent"按写路径排队（同路径串行、不同路径并行），
     # 这是行为变化，所以默认必须是"什么都不做"（§1.3）。
@@ -679,24 +679,35 @@ def _load_gateway_config() -> dict[str, Any]:
     """
     import json
     import logging
+    import time
     import urllib.request
 
     if not settings.internal_token:
         return {}
     url = f"{settings.gateway_internal_url.rstrip('/')}/v1/internal/engine-config"
-    try:
-        req = urllib.request.Request(
-            url, headers={"X-Internal-Token": settings.internal_token}
-        )
-        with urllib.request.urlopen(req, timeout=1) as resp:
-            payload = json.loads(resp.read().decode())
-        data = payload.get("data", payload) if isinstance(payload, dict) else {}
-        return {k: v for k, v in data.items() if v is not None}
-    except Exception as exc:  # noqa: BLE001 - 配置下发失败不阻断引擎启动
-        logging.getLogger(__name__).warning(
-            "load engine config from gateway failed: %s", exc
-        )
-        return {}
+    # 网关与引擎同时启动是常态（compose / k8s 都并行拉起），此时第一次请求大概率被拒。
+    # 给两次短超时重试：比一次性 1s 超时更能覆盖"网关还没 listen"的窗口，
+    # 同时把最坏启动阻塞从 N×1s 压到 ~1.5s。仍失败则 fail-open 用 env 默认值。
+    last: Exception | None = None
+    for attempt, timeout in enumerate((0.5, 1.0)):
+        try:
+            req = urllib.request.Request(
+                url, headers={"X-Internal-Token": settings.internal_token}
+            )
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                payload = json.loads(resp.read().decode())
+            data = payload.get("data", payload) if isinstance(payload, dict) else {}
+            return {k: v for k, v in data.items() if v is not None}
+        except Exception as exc:  # noqa: BLE001 - 配置下发失败不阻断引擎启动
+            last = exc
+            if attempt == 0:
+                time.sleep(0.1)
+    # 区分"拉取失败"与"网关没有配置"：两者都回落 env，但排障时需要能分辨。
+    logging.getLogger(__name__).warning(
+        "load engine config from gateway failed after retries, "
+        "falling back to env defaults: %s", last
+    )
+    return {}
 
 
 # 合并网关下发的配置：仅接受 Settings 已声明的字段，DB/env 之外不引入任意键。

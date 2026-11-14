@@ -115,7 +115,7 @@ type BranchResult struct {
 
 // BranchSession 从 srcSessionID 裁出一段上下文，落到一个**带血缘标记**的新会话。
 //
-// 参照实现 `vendor/dsh-synapse` 按 `session.header.parentSession` 画边、用 `seedLength`
+// 同类实现按 `session.header.parentSession` 画边、用 `seedLength`
 // 记分叉点；我们此前只有"复制前 N 条"的 fork，没有父子关系与裁剪语义。
 //
 // 两种模式（见 planBranch）：

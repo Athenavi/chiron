@@ -82,7 +82,7 @@ async def test_dispatch_agent_without_system_prompt_fails_explicitly():
     """无 `system_prompt` ⇒ **显式失败**，不得谎报 `status=dispatched`。
 
     40dfc99 之前这里回退到"内存 registry 的假派发"：返回 dispatched 但什么都没做，
-    调用方与模型都会以为任务已派出（vendor/规划.md §1.3「失败要显式」）。
+    调用方与模型都会以为任务已派出（「失败要显式」）。
     真配置派发路径（带 system_prompt）由 tests/test_agents_dispatch_gateway.py 覆盖。
     """
     app = create_app()

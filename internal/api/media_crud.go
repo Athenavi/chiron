@@ -396,7 +396,7 @@ func (h *MediaHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 鎵€鏈夋潈 + 褰撳墠鍊?
+	// 校验所有权 + 当前层级?
 	var curName, curParent string
 	if err := db.GlobalDBManager.QueryRow(r.Context(),
 		`SELECT COALESCE(name,''), COALESCE(parent_id,'') FROM media_assets WHERE id=$1 AND tenant_id=$2 AND user_id=$3`,
@@ -535,20 +535,14 @@ func (h *MediaHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 鏌ヨ璧勪骇骞舵牎楠屾墍鏈夋潈
-	if err := db.GlobalDBManager.QueryRow(ctx,
-		`SELECT 1 FROM media_assets WHERE id = $1 AND tenant_id = $2 AND user_id = $3`,
-		id, claims.TenantID, claims.UserID,
-	).Scan(new(int)); err != nil {
-		NotFound(w, "media asset not found")
-		return
-	}
-
-	ids, err := collectFolderIDs(func(parent string) ([]string, error) {
-		return h.getChildren(ctx, claims.TenantID, claims.UserID, parent)
-	}, id)
+	// 查询资产并校验所有权
+	ids, err := h.collectSubtreeIDs(ctx, claims.TenantID, claims.UserID, []string{id})
 	if err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, "collect folder tree failed")
+		return
+	}
+	if len(ids) == 0 {
+		NotFound(w, "media asset not found")
 		return
 	}
 
@@ -599,35 +593,16 @@ func (h *MediaHandler) BatchDelete(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
-	// 归属过滤：collectFolderIDs 会把传入的起始 id **无条件**纳入返回集
-	// （media_helpers.go:39），若直接展开，攻击者提交他人 assetID 即可让后续
-	// assetObjectKeys / store.Delete 命中他人的对象存储键 —— 跨租户删除文件。
-	// 展开前先剔除不属于当前租户/用户的 id（静默跳过，避免枚举探测）。
-	owned := make([]string, 0, len(body.IDs))
-	for _, id := range body.IDs {
-		var one int
-		if err := db.GlobalDBManager.QueryRow(ctx,
-			`SELECT 1 FROM media_assets WHERE id = $1 AND tenant_id = $2 AND user_id = $3`,
-			id, claims.TenantID, claims.UserID).Scan(&one); err != nil {
-			continue
-		}
-		owned = append(owned, id)
-	}
-	if len(owned) == 0 {
-		NotFound(w, "media asset not found")
+	// 归属过滤 + 子树展开一次完成：递归项里带 tenant_id/user_id，因此
+	// 传入他人的 assetID 不会进入结果集（静默跳过，避免枚举探测）。
+	allIDs, err := h.collectSubtreeIDs(ctx, claims.TenantID, claims.UserID, body.IDs)
+	if err != nil {
+		logAndRespond(w, err, http.StatusInternalServerError, "collect folder tree failed")
 		return
 	}
-
-	allIDs := make([]string, 0, len(owned))
-	for _, id := range owned {
-		sub, err := collectFolderIDs(func(parent string) ([]string, error) {
-			return h.getChildren(ctx, claims.TenantID, claims.UserID, parent)
-		}, id)
-		if err != nil {
-			logAndRespond(w, err, http.StatusInternalServerError, "collect folder tree failed")
-			return
-		}
-		allIDs = append(allIDs, sub...)
+	if len(allIDs) == 0 {
+		NotFound(w, "media asset not found")
+		return
 	}
 
 	// 删除存储对象（DB 为准，失败仅记日志）
@@ -655,27 +630,41 @@ func (h *MediaHandler) BatchDelete(w http.ResponseWriter, r *http.Request) {
 
 // ── Shared helpers ──
 
-// getChildren returns the child asset IDs for a given parent folder.
+// collectSubtreeIDs 一次递归 CTE 取回 rootIDs 及其全部后代（文件夹与文件），去重。
 //
-// `COALESCE(parent_id, '')` 与列表、重名检查、建链四处保持**同一个口径**。
-// 传具体 id 时 NULL 本来就不会误匹配，但"根目录下有哪些孩子"（parentID 为空）
-// 这种调用一旦出现，等值比较会静默返回空 —— 递归删除于是漏删整棵根级子树。
-// 一处口径不齐，就等一个不容易复现的现象。
-func (h *MediaHandler) getChildren(ctx context.Context, tenantID int16, userID, parentID string) ([]string, error) {
-	rows, err := db.GlobalDBManager.Query(ctx,
-		`SELECT id FROM media_assets WHERE tenant_id=$1 AND user_id=$2 AND COALESCE(parent_id, '')=$3`,
-		tenantID, userID, parentID)
+// 归属过滤（tenant_id / user_id）写在**递归项里**，所以结果集天然只含当前用户可见的节点：
+// 传入他人的 assetID 得到空集，不会展开到别人的文件树 —— 这一点比"先展开再过滤"更硬。
+// 环由 `UNION`（非 `UNION ALL`）在 id 上消掉；`depth` 兜底防止畸形父指针无限递归。
+//
+// 相比原先的逐层 BFS：depth=N 的目录从 N 次 DB 往返降为 1 次。
+func (h *MediaHandler) collectSubtreeIDs(
+	ctx context.Context, tenantID int16, userID string, rootIDs []string,
+) ([]string, error) {
+	if len(rootIDs) == 0 {
+		return nil, nil
+	}
+	rows, err := db.GlobalDBManager.Query(ctx, `
+		WITH RECURSIVE subtree(id, depth) AS (
+			SELECT id, 0 FROM media_assets
+			 WHERE id = ANY($1) AND tenant_id = $2 AND user_id = $3
+			UNION
+			SELECT m.id, s.depth + 1 FROM media_assets m
+			  JOIN subtree s ON m.parent_id = s.id
+			 WHERE m.tenant_id = $2 AND m.user_id = $3 AND s.depth < $4
+		)
+		SELECT id FROM subtree`, rootIDs, tenantID, userID, maxFolderDepth)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var ids []string
+
+	ids := make([]string, 0, len(rootIDs))
 	for rows.Next() {
-		var cid string
-		if err := rows.Scan(&cid); err != nil {
+		var id string
+		if err := rows.Scan(&id); err != nil {
 			return nil, err
 		}
-		ids = append(ids, cid)
+		ids = append(ids, id)
 	}
 	return ids, rows.Err()
 }

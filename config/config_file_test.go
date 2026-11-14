@@ -36,7 +36,7 @@ func TestStripJSONCommentsDropsBOM(t *testing.T) {
 	}
 }
 
-// 这条用例回归的是 vendor/规划.md §3.3-4：仓库自带的 config/config.json 首行是 `//`
+// 这条用例回归的是配置解析口径：仓库自带的 config/config.json 首行是 `//`
 // 注释，原实现直接 json.Unmarshal ⇒ 解析失败 ⇒ 6 个键全部静默失效。
 func TestShippedConfigJSONIsParseableJSONC(t *testing.T) {
 	data, err := os.ReadFile("config.json")

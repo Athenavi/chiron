@@ -24,7 +24,7 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      # `-mod=mod` 是必需的：仓库里的 vendor/ 放的是参考源码（vendor/DeepSeek-Reasonix，
+      # `-mod=mod` 是必需的：仓库里的 vendor/ 放的是本地参考源码（不参与构建，
       # 不含 vendor/modules.txt），Go 只要看到 vendor/ 就会按 vendor 模式做一致性检查
       # 并报 "inconsistent vendoring"。run.py / Makefile / Dockerfile 同样显式排除了它。
       - run: go build -mod=mod ./...

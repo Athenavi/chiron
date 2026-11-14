@@ -1,6 +1,6 @@
 """R2 回归测试：子 Agent 写路径仲裁（`app/subagent/scheduler.py`）。
 
-对位 vendor/规划.md §3.5 的 R2 与 `vendor/DeepSeek-Reasonix/internal/agent/scheduler.go`
+对位 R2 的语义与上游同类实现
 （含 `scheduler_test.go` / `write_claims_test.go` 的口径）。**三条并发行为是核心验收**：
 
 1. 同路径 ⇒ **串行**（后来的排队等前者释放）；

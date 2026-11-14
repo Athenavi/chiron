@@ -311,7 +311,7 @@ async def _record_delegation_span(
     两层守卫：
     1. `trace_id` 为空 ⇒ 直接返回。没有父 trace 就不写（凭空造一个 trace 只会产出孤儿节点，
        在父图里看不见）；这同时让"未接入 trace 的调用方"（例如跨实例 `internal_subagent`）
-       保持**零开销、零行为变化** —— vendor/规划.md §1.3 的"新机制默认什么都不做"。
+       保持**零开销、零行为变化** —— "新机制默认什么都不做"。
     2. 一切异常降级为一条 warning 日志。`record_span` 内部本来就 fail-soft（Redis 不可用 /
        `no_retention` 时跳过），这里再包一层是因为**委派不能因为观测面出问题而失败** ——
        未来 trace 模块若改了失败语义（例如配置错误直接抛），今天的调用方也不该被拖下水。
@@ -544,7 +544,7 @@ class SubAgentRunner:
         #: `None` = 不按调用收窄；**空序列** = 这一次不允许任何工具（两者语义不同，故用 `is not None`
         #: 而不是真值判断）。
         call_tools: Sequence[str] | None = None,
-        #: R2（vendor/规划.md §3.5）：本次委派**声明**要写的路径（见 app/subagent/scheduler.py）。
+        #: R2：本次委派**声明**要写的路径（见 app/subagent/scheduler.py）。
         #:
         #: `None` = 不覆盖，用 Profile 的 `write_paths`；两边都没有 ⇒ 可写委派由仲裁器按
         #: **整工作区**独占（保守方向）。非空 = 本次委派的声明。
@@ -674,7 +674,7 @@ class SubAgentRunner:
             },
         )
 
-        # ── R1（vendor/规划.md §3.5）：宿主证据。执行**前后**各拍一次工作区快照，用于核验子
+        # ── R1：宿主证据。执行**前后**各拍一次工作区快照，用于核验子
         # Agent 的产出，而不是只信它的自述。有界快照；可用 SUBAGENT_HOST_RECEIPTS=false 关掉。
         from app.config import settings
 

@@ -706,6 +706,12 @@ func (h *AuthHandler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 		argIdx++
 	}
 	setClauses = strings.TrimSuffix(setClauses, ", ")
+	if setClauses == "" {
+		// 三个字段都没给：直接返回而不是让 SQL 走成 `UPDATE users SET , updated_at ...`。
+		// 空 PATCH 视为「无变更」，客户端重试时不该拿到 500。
+		OK(w, map[string]string{"status": "unchanged"})
+		return
+	}
 	args = append(args, claims.UserID)
 
 	if _, err := db.GlobalDBManager.Exec(r.Context(),

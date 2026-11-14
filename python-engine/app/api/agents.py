@@ -104,7 +104,7 @@ async def dispatch_agent(body: AgentDispatchRequest) -> dict[str, Any]:
     # 没有 system_prompt ⇒ 拿不到 Agent 的真实配置（Go 从 DB agents 表读出后随请求传入）。
     # 此前这里回退到一个"内存 registry 的假派发"：返回 status=dispatched，但**什么都没做** ——
     # 调用方与模型都会以为任务已经派出去了。宁可显式失败，也不谎报成功
-    # （vendor/规划.md §1.3「失败要显式」）。
+    # （「失败要显式」）。
     return {
         "success": False,
         "error": (

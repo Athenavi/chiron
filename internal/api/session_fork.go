@@ -4,7 +4,7 @@ package api
 //
 //	POST /v1/conversations/{id}/fork   {from_index, title?} → 201 {session_id, copied, branch_from_seq}
 //
-// 为什么需要：会话地图要按**真实分支**连线（参照 `vendor/dsh-synapse`：它按 DSH 原生
+// 为什么需要：会话地图要按**真实分支**连线（参照上游同类实现：按原生
 // `session.header.parentSession` 画边、用 `seedLength` 记分叉点）。我们此前没有 fork，
 // 地图只能是孤立方块。这个端点补上"分支"这个事实本身，地图才有资格连边。
 //

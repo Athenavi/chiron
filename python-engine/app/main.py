@@ -1164,7 +1164,7 @@ def _apply_sandbox_service_branch(base: Any, *, service_healthy: bool | None = N
       （静默回退会让"隔离已生效"这个判断失真，见 config.py 同段说明）。
 
     抽成函数是为了**可测**：这段"配置 → 运行期生效"的接线此前内联在 `lifespan` 里，
-    没有任何用例 —— 而"配置里写了却没人用"正是这个仓库反复踩的坑（见 vendor/规划.md §4）。
+    没有任何用例 —— 而"配置里写了却没人用"正是这个仓库反复踩的坑。
     """
     if (settings.sandbox_backend or "local").strip().lower() != "service" or not settings.sandbox_service_url:
         return base

@@ -309,7 +309,7 @@ def test_report_context_is_not_frozen_into_checkpoint():
 
 @pytest.mark.asyncio
 async def test_injection_failure_is_visible_but_does_not_break_the_turn(monkeypatch, caplog):
-    """失败要**显式不静默**（`vendor/规划.md` §1.3）：不抛，但必须留下 warning。"""
+    """失败要**显式不静默**：不抛，但必须留下 warning。"""
     from app.main import _inject_subagent_reports
 
     async def _boom(**kwargs):

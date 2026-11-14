@@ -255,19 +255,6 @@ cd python-engine && python -m pytest -q -m integration tests/test_mcp_owner_leas
 | text 事件合帧下沉到 hub | **不建议** | 网关已有 50ms 合帧；下沉会让 `tool_call`、`[thinking]` 等**必须即时**的事件进窗口，复杂度与首字延迟风险大于省下的几次 Redis 写入 |
 | 全库时间列统一为 `TIMESTAMPTZ` | **可降级为常规任务** | 现状：`timestamp without time zone` **142 列（72 表）**、`timestamp with time zone` **12 列（5 表）**；"名字即时间"的 VARCHAR 只有 3 列 —— `schema_migrations.applied_at`（该表已废弃，见第 7 节）与两个**日期**列 `meeting_notes.date` / `admin_tenant_usage.stat_date`（若确为"只有日期"的字段，属 `date` 类型的独立问题，不在 `timestamp → timestamptz` 范围内）。因此**不涉及** VARCHAR→timestamp 的 `USING` 转换与存量数据风险；剩余工作只是把 `timestamp` 提升为 `timestamptz`（含 ORM 生成器与数十张表），影响面明确、可在有 PG 的环境一次推进 |
 
-### 结构性后续
-
-- **run 现场 checkpoint 续跑**：「路由到持有 run 的实例 + 陈旧审批被拒」已实现；「实例故障后从 checkpoint
-  续跑而非重跑」也已实现：表 `agent_runs`· 写路径 `app/agent/runtime.py::_save_checkpoint`
-  （回合末、只写不读、失败只降级恢复粒度）· 状态机 `app/agent/checkpoint.py` · 续跑/接管
-  `app/agent/resume.py` + `main.py` 启动 reconciler；单测 38 条 + `tests/test_resume_kill_drill.py`
-  的「kill → 重启 → 断言不重放」真子进程演练。**不做**的是「跨实例的现场内存迁移」；
-- **迁移入口**：见 [数据库迁移入口决策](db-migration-entry.md) —— Alembic 是唯一入口；
-  网关启动时由 `internal/db/schema_version.go` 做只读校验（不写 schema）；
-- **`credit_transactions` / `payments` 两处 DDL**：DDL 全部收敛到唯一权威迁移
-  `0001_authoritative_baseline`；`internal/billing/pgstore.go` 的 `EnsureTables` 已改为只读 `VerifySchema`，
-  `ent_model_routes` 的 `InitTable` → `VerifyTable`。
-
 ## 11. 混沌工程（可选，默认关闭）
 
 用故障注入验证系统韧性。**默认整体关闭**：`CHAOS_ENABLED` 未设为 `true` 时，两侧中间件都直接放行。

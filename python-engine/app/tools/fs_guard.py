@@ -4,7 +4,7 @@ read_file 记录文件版本签名（mtime+size+首块 hash）；write/edit 前�
 文件"被读过但已变化"则拒绝（FS_NOT_OBSERVED 语义），防止模型基于过期
 视图编辑。
 
-**两种模式**（开关 `settings.fs_require_observation`，**默认关**，见 `vendor/规划.md` §3.3）：
+**两种模式**（开关 `settings.fs_require_observation`，**默认关**）：
 
 * 默认：**从未被 read 过的文件不受限制**（兼容旧行为）；
 * 严格：**已存在但从未读过**的文件也拒绝 —— 否则模型可以凭"想象中的内容"整篇覆盖

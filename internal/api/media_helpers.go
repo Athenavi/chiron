@@ -33,30 +33,13 @@ func wouldCreateCycle(getParent func(id string) (string, error), id, newParent s
 	return false, fmt.Errorf("parent chain too deep")
 }
 
-// collectFolderIDs returns rootID plus every descendant id (folders and
-// files), breadth-first, de-duplicated.
-func collectFolderIDs(getChildren func(parent string) ([]string, error), rootID string) ([]string, error) {
-	ids := []string{rootID}
-	queue := []string{rootID}
-	seen := map[string]bool{rootID: true}
-	for len(queue) > 0 {
-		parent := queue[0]
-		queue = queue[1:]
-		children, err := getChildren(parent)
-		if err != nil {
-			return nil, err
-		}
-		for _, c := range children {
-			if seen[c] {
-				continue
-			}
-			seen[c] = true
-			ids = append(ids, c)
-			queue = append(queue, c)
-		}
-	}
-	return ids, nil
-}
+// collectFolderIDs 的递归展开已下沉为一次递归 CTE（见 media_crud.go 的
+// collectSubtreeIDs）：逐层一次 DB 往返在深目录 / 大批量删除时会放大成 N 次查询，
+// 且"根目录 parent_id 为 NULL"的口径要散在多处维护。现在归属过滤与环消除都在 SQL 里完成。
+//
+// maxFolderDepth 是递归展开的深度上限，防止畸形数据（父指针成环）导致无限递归。
+const maxFolderDepth = 100
+
 
 // parsePagination parses page/page_size query params. Defaults 1/50, size cap 200.
 func parsePagination(q url.Values) (page, pageSize int) {

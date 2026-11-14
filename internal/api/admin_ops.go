@@ -276,6 +276,12 @@ func (h *AdminHandler) UpdateTenant(w http.ResponseWriter, r *http.Request) {
 			idx++
 		}
 	}
+	if len(sets) == 0 {
+		// 与 UpdateUser 同一口径：一个字段都没给不是"改成空"，而是无效请求。
+		// 不加这道检查，SQL 会渲染成 `UPDATE tenants SET  WHERE ...` —— 语法错误被当成 500。
+		BadRequest(w, "no fields to update")
+		return
+	}
 	args = append(args, id)
 	// 不写 updated_at：tenants 表没有这一列（基线只有 id/name/created_at/status）。
 	// 之前的 `SET ..., updated_at = NOW()` 让「编辑租户」与「暂停」恒 500。

@@ -117,7 +117,7 @@ func setIfNotInt(key string, val *int) {
 //
 // 背景：config/config.json 首行就是 `//` 注释，而 loadConfigFile 原先直接
 // json.Unmarshal ⇒ 解析失败 ⇒ 整个文件的 6 个键**静默失效**（只留一行 stderr
-// warning），即 vendor/规划.md §3.3-4 与 §4「配置里有 ≠ 运行期生效」。
+// warning），即「配置里有 ≠ 运行期生效」。
 //
 // 只做"去注释"这一件事：不解析、不校验、不放宽 JSON 语法（不做尾逗号等宽容处理），
 // 语法错误仍由 json.Unmarshal 报出 —— 失败要显式（§1.3）。

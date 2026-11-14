@@ -270,7 +270,7 @@ def builtin_skills_root() -> Path | None:
     缺失时返回 `None`（**不抛异常** —— 内置源缺失不该让技能列表报错），但会**告警一次**：
     静默返回 None 曾经掩盖了一个真实缺陷 —— 引擎镜像只 `COPY app/`（构建上下文是
     `python-engine/`），`market/skills/` 进不了镜像，于是容器部署**一直没有内置技能**
-    且日志里什么都看不到（vendor/规划.md §1.3「失败要显式」）。
+    且日志里什么都看不到（「失败要显式」）。
     """
     override = os.getenv(BUILTIN_SKILLS_ENV, "").strip()
     if override:

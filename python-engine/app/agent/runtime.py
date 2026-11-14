@@ -345,7 +345,7 @@ def _apply_system_prefix(
         # （盖在调用方内容与 mode persona 之上，且不会被打断）。
         #
         # 注册表默认为空 ⇒ 这一步当前是**恒等变换**，不改变任何现有模型的行为；
-        # 给哪个模型家族加什么 suffix 是产品决定（见 vendor/方案04.md §8 未决问题）。
+        # 给哪个模型家族加什么 suffix 是产品决定（属未决产品决策）。
         base_prompt = apply_harness_suffix(
             task.system_prompt,
             model=str((task.llm_config or {}).get("model", "") or ""),
