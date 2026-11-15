@@ -54,7 +54,7 @@ class InternalSubagentRequest(BaseModel):
 @router.post("/v1/internal/subagent/run")
 async def internal_subagent_run(body: InternalSubagentRequest) -> dict[str, Any]:
     """在**本实例**执行一次远端委派（同步，返回工具载荷形态的结果）。"""
-    from app.tools.subagent import MAX_DEPTH, MAX_TURNS_CAP
+    from app.tools.subagent import MAX_DEPTH, _resolve_turns
 
     if not (body.task or "").strip():
         return {"ok": False, "error": "task is required"}
@@ -105,7 +105,7 @@ async def internal_subagent_run(body: InternalSubagentRequest) -> dict[str, Any]
         result = await runner.run(
             body.task,
             mode=body.mode or "normal",
-            max_turns=max(1, min(int(body.max_turns or 5), MAX_TURNS_CAP)),
+            max_turns=_resolve_turns(body.max_turns),
         )
     except Exception as exc:  # noqa: BLE001 — 单次委派失败以结构化错误回给调用方
         logger.warning("internal subagent run failed (session=%s): %s", body.session_id, exc)

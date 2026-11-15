@@ -1760,27 +1760,29 @@ class AgentRuntime:
         # 产出 `budget_exceeded:<轴>`，前端能看到原因，而不是静默中断。
         from app.agent.task_budget import DEFAULT_MAX_STEPS as _DEFAULT_STEPS
         from app.agent.task_budget import DEFAULT_MAX_TOKENS as _DEFAULT_TOKENS
-        from app.agent.task_budget import DEFAULT_MAX_TOKENS_CEILING as _TOKENS_CEILING
+        from app.agent.task_budget import MAX_TOKEN_SEGMENTS
         from app.agent.task_budget import from_env as _budget_from_env
 
         # 步数轴随轮数联动。
         #
-        # `steps` 固定 60 而 `max_turns` 可配到 50（乃至更高）时：50 轮里每轮 2–3 次
+        # `steps` 固定值而 `max_turns` 可配到 50（乃至更高）时：50 轮里每轮 2–3 次
         # 工具调用就把步数耗尽 —— 轮次还有富余，步数先见底，表现和"轮数太少"完全一样
         # （任务没做完就报 `budget_exceeded:steps` 停下）。按每轮 4 次工具给足余量，
-        # 并把下限钉在 60，保证短任务行为不变。
+        # 并把下限钉在 `DEFAULT_MAX_STEPS`，保证短任务行为不变。
         #
         # 优先级不变：显式参数 > `AGENT_MAX_STEPS` > 这里算出的默认值 —— 运维若显式
         # 配了步数上限，那仍然是最终口径。
         _turns_limit = int(getattr(task, "max_turns", 0) or 0)
         _default_steps = max(_DEFAULT_STEPS, _turns_limit * 4)
-
-        # token 轴随**模型窗口**联动，而不是钉一个常数。
+        budget = _budget_from_env(
+            default_steps=_default_steps, default_tokens=_DEFAULT_TOKENS
+        )
+        # token 轴随**模型窗口**自适应（`窗口 × 3`，只放大不缩小）。
         #
-        # 每轮都要重发整段上下文，所以"一轮的消耗"量级就是窗口的一大截。固定 400k
-        # 对 128K 窗口的模型只够 2–3 轮：轮次还有富余，token 先见底，表现与"轮数太少"
-        # 完全一样（`budget_exceeded:tokens` 在任务做完前就判停）。按"每轮半个窗口 ×
-        # 轮数"给默认值；下限仍钉 400k、上限封顶，保证短任务行为不变、失控仍拦得住。
+        # 每轮都要重发整段上下文，所以累计消耗随轮数**平方级**增长：单轮 5k 涨到 60k，
+        # 第 40 轮累计约 1.3M。固定 400k 因此在第 12–15 轮就撞线，后面 25 轮根本用不到。
+        # 更糟的是越界走失败收尾，而自动续跑继承已用量 ⇒ 接上来立刻再越界。
+        # 这里按窗口给量，并在轮首撞线时由 `grant_next_segment()` 抬上限续段。
         #
         # 这里同步读窗口缓存（`cached_window`）：未命中就回落默认窗口，不为读库在这一行
         # await —— 预算构造处在每轮开场的必经路径上。
@@ -1791,14 +1793,7 @@ class AgentRuntime:
         _budget_window = (
             _model_window.cached_window(_budget_model) if _budget_model else None
         ) or _model_window.DEFAULT_CONTEXT_WINDOW
-        _turns_for_tokens = _turns_limit or 10
-        _default_tokens = min(
-            _TOKENS_CEILING,
-            max(_DEFAULT_TOKENS, int(_budget_window * 0.5) * _turns_for_tokens),
-        )
-        budget = _budget_from_env(
-            default_steps=_default_steps, default_tokens=_default_tokens
-        )
+        budget.scale_to_window(_budget_window, floor=_DEFAULT_TOKENS)
         self._budget = budget
         self._tool_steps = 0
         # P5：恢复状态（每次 run 新建）—— 判据是"同一个失败操作"，不是"试了几次"。
@@ -2366,6 +2361,27 @@ class AgentRuntime:
                     # 取不到单价时为 0 ⇒ 该轴不触发，与 M24 之前一致。
                     cost=_cost_spent(),
                 )
+                # token 撞线不直接判失败，而是**开下一段**：只抬上限、不动已用量。
+                #
+                # 为什么：token 轴按"累计重发历史"计数，每轮把完整历史重发一次 ⇒ 累计
+                # 约呈 n²。40 轮的任务在第 12–15 轮就会撞上固定的 400k，后面 25 轮根本
+                # 用不到；而越界走 `failed` 收尾后，自动续跑继承已用量 ⇒ 接上来立刻再
+                # 越界，永远跑不完。已用量保持累加是**计费口径**（清零会让网关少扣费），
+                # 所以只抬上限。
+                #
+                # 判定顺序保证这一步只发生在 steps / turns 都没越界时（`exceeded()` 按
+                # steps → turns → tokens 返回），段数上限与显式硬限制见
+                # `grant_next_segment()`。
+                if exceeded == "tokens" and budget.grant_next_segment():
+                    logger.info(
+                        "Agent token budget extended (segment=%d/%d, limit=%d, used=%d, task=%s)",
+                        budget.segments,
+                        MAX_TOKEN_SEGMENTS,
+                        budget.tokens,
+                        _tokens_spent(),
+                        task.id,
+                    )
+                    exceeded = ""
                 if exceeded:
                     logger.warning(
                         "Agent budget exceeded (axis=%s, task=%s, budget=%s)",

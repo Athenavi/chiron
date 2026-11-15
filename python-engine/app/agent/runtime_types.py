@@ -36,7 +36,11 @@ class AgentTask:
     history: list[dict[str, Any]] = field(default_factory=list)
     tools: list[dict[str, Any]] = field(default_factory=list)
     llm_config: dict[str, Any] = field(default_factory=dict)
-    max_turns: int = 5
+    #: 回合数上限。默认值与网关 `DefaultMaxTurns`（internal/api/helpers.go）保持一致 ——
+    #: 网关在请求里总会显式下发这个值，此处的默认只是"直接构造 AgentTask"时的兜底
+    #: （引擎内部调用、测试）。此前这里（以及 `parse`）是 5/10：任何没走到网关默认值的
+    #: 路径都会在 5–10 轮内停下，而模型还远没做完 —— 表现为"任务跑一半就没声了"。
+    max_turns: int = 50
     subagent_depth: int = 0  # S3: 委派深度（subagent 递归限制，MAX_DEPTH=3）
     #: M15b：本次 run 归属的**任务线根**（`subagent_runs.root_run_id`，见权威基线）。
     #: 只有子 Agent 有它 —— 线账统计的是委派树的 token（主 run 自己那一份不在 `subagent_runs`
@@ -91,7 +95,7 @@ class AgentTask:
             history=data.get("history", []),
             tools=data.get("tools", []),
             llm_config=data.get("llm_config", {}),
-            max_turns=data.get("max_turns", 10),
+            max_turns=data.get("max_turns", 50),
             attachments=data.get("attachments") or [],
         )
 

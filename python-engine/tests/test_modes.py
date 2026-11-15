@@ -82,3 +82,16 @@ class TestGetModeConfig:
         assert isinstance(cfg, ModeConfig)
         with pytest.raises(dataclasses.FrozenInstanceError):
             cfg.include_tools = frozenset()  # frozen dataclass 禁止赋值
+
+
+def test_ask_user_是核心工具():
+    """`ask_user` 必须在核心集里 —— 否则 normal 模式下模型看不见它。
+
+    这正是"ask_user 从未运行过"的直接原因：工具注册了、runtime 的「发问 → 等待
+    /v1/agent/answer → 回填」链路也完整，但它不在白名单里，模型只能靠 tool_search
+    碰运气（别名表当时连"提问"都没有），于是从来没用过。
+
+    "注册了" ≠ "模型知道有这个工具"。这条断言钉住后者。
+    """
+    assert "ask_user" in CORE_TOOL_NAMES
+    assert "ask_user" in get_mode_config("normal").include_tools

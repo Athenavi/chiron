@@ -66,6 +66,13 @@ _ALIASES: dict[str, str] = {
     "技术方案": "tech_design",
     "拆解": "task_decompose",
     "记忆": "memory_search",
+    # 结构化提问：模型想"问用户"时的中文说法。此前别名表里没有这些词，
+    # 一旦 ask_user 不在核心集（minimal 模式），它就彻底不可达。
+    "提问": "ask_user",
+    "询问": "ask_user",
+    "问用户": "ask_user",
+    "确认": "ask_user",
+    "澄清": "ask_user",
 }
 
 

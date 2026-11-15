@@ -20,7 +20,6 @@ import os
 from typing import Any
 
 from app.subagent import registry as subagent_registry
-from app.subagent.budget import from_env as budget_from_env
 from app.tools.context import (
     get_all,
     get_gateway,
@@ -35,8 +34,23 @@ from app.tools.registry import registry
 
 logger = logging.getLogger(__name__)
 
-MAX_TURNS_CAP = 10
+MAX_TURNS_CAP = 30
 MAX_DEPTH = 3  # 全局硬上限（S3）；Profile 的 max_depth 只能更严格
+
+
+def _resolve_turns(max_turns: int) -> int:
+    """工具参数 `max_turns` → 传给 `SubAgentRunner.run` 的值。
+
+    **未指定时返回 0，而不是 5** —— 0 是 runner 约定的"按 Profile 决定"
+    （`max_turns or (spec.max_turns if spec else 30)`）。
+
+    此前这里写的是 `max(1, min(max_turns or 5, MAX_TURNS_CAP))`：结果**恒 ≥1**，
+    于是 runner 里 `max_turns or spec.max_turns` 永远走不到 spec 分支 ——
+    Agent Profile 上配的 `max_turns` 一整个是死配置，所有委派都被钉在那个 5 上。
+    （这就是"子 Agent 跑到第 5 轮就停"的机械原因。）
+    """
+    return max(0, min(int(max_turns or 0), MAX_TURNS_CAP))
+
 
 #: 同步委派的默认 wall 上限（秒）。后台委派由注册表看门狗按 idle / max_runtime 收口，
 #: 而同步委派是"父 turn 原地等"的路径 —— 没有上限时，上游一挂就无限期占住父回合
@@ -67,6 +81,22 @@ def _expert_system_prompt(expert: str) -> str:
         if isinstance(item, dict) and str(item.get("name", "")).strip() == name:
             return str(item.get("system_prompt", "") or "")
     return ""
+
+
+def _budget_from_env(**kwargs: Any) -> Any:
+    """惰性转发到 `app.subagent.budget.from_env`。
+
+    为什么不在模块顶层 import：`app.subagent.budget` → `app.agent.task_budget` 会触发
+    `app.agent.__init__`，而后者（经由 `prompt_engine`/`runtime`）最终会 import 本模块 ——
+    顶层导入因此是**循环**，表现为 `ImportError: cannot import name 'from_env' from
+    partially initialized module 'app.subagent.budget'`。只要 `app.subagent.budget` 是
+    **第一个**被导入的模块（任何 `from app.subagent.budget import ...` 的测试、或引擎启动
+    时的导入顺序变化），整个导入链就崩在收集阶段：测试一条都跑不起来，预算逻辑长期
+    没有覆盖。放到调用点（函数体内）导入，链就断得干净。
+    """
+    from app.subagent.budget import from_env as _from_env
+
+    return _from_env(**kwargs)
 
 
 def _get_store() -> Any:
@@ -109,7 +139,7 @@ def _sync_wall_seconds(run_in_background: bool, max_seconds: int) -> int:
 async def subagent(
     task: str,
     mode: str = "normal",
-    max_turns: int = 5,
+    max_turns: int = 0,
     expert: str = "",
     profile: str = "",
     run_in_background: bool = True,
@@ -221,7 +251,7 @@ async def subagent(
                 allow_write=bool(allow_write),
                 # A4：把父层声明的"收窄后的工具名"带上（只能收窄、不能放宽）
                 call_tools=call_tools,
-                budget=budget_from_env(
+                budget=_budget_from_env(
                     max_tokens=max_tokens,
                     max_seconds=_sync_wall_seconds(False, max_seconds),
                 ),
@@ -236,7 +266,7 @@ async def subagent(
                 child_task,
                 profile_ref=profile_ref,
                 mode=mode or "normal",
-                max_turns=max(1, min(int(max_turns or 5), MAX_TURNS_CAP)),
+                max_turns=_resolve_turns(max_turns),
                 expert_prompt=_expert_system_prompt(expert),
             )
 
@@ -291,7 +321,7 @@ async def subagent(
         # per-run 预算：显式参数 > 环境变量 > 默认（见 app/subagent/budget.py）。
         # 同步委派额外带一个 wall 默认值（见 _sync_wall_seconds）——它是"父 turn 原地等"
         # 的路径，没有上限时上游一挂就无限期占住父回合；后台委派由看门狗收口，不需要。
-        budget=budget_from_env(
+        budget=_budget_from_env(
             max_tokens=max_tokens,
             max_seconds=_sync_wall_seconds(run_in_background, max_seconds),
         ),
@@ -351,7 +381,7 @@ async def subagent(
                 },
                 profile_ref=profile,
                 mode=mode or "normal",
-                max_turns=max(1, min(int(max_turns or 5), MAX_TURNS_CAP)),
+                max_turns=_resolve_turns(max_turns),
                 expert_prompt=_expert_system_prompt(expert),
                 # 重跑血缘（仅 rerun_subagent 会传）：写进 subagent_runs.rerun_of，
                 # 让"这次是从哪一次重跑来的"在 DB 里可查（Redis 会丢，血缘不能丢）。
@@ -406,7 +436,7 @@ async def subagent(
             run_id=sync_run_id,
             profile_ref=profile,
             mode=mode or "normal",
-            max_turns=max(1, min(int(max_turns or 5), MAX_TURNS_CAP)),
+            max_turns=_resolve_turns(max_turns),
             expert_prompt=_expert_system_prompt(expert),
         ),
         name=f"subagent-sync-{sync_run_id}",
@@ -594,8 +624,11 @@ registry.register(
             },
             "max_turns": {
                 "type": "integer",
-                "default": 5,
-                "description": "Child loop turns cap (max 10)",
+                "default": 0,
+                "description": (
+                    "Child loop turns cap (0 = use the Agent Profile's value, "
+                    f"default 15; max {MAX_TURNS_CAP})"
+                ),
             },
             "run_in_background": {
                 "type": "boolean",

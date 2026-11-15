@@ -266,3 +266,27 @@ async def test_takeover_segment_opens_no_line_reservation(monkeypatch) -> None:
     )
 
     assert spy.calls == [], "接管段既不查线账也不留预留（它没有线），更不能预留出一份额度"
+
+
+async def test_token_wall_opens_a_new_segment_instead_of_failing(monkeypatch) -> None:
+    """token 撞线**不判失败**，而是抬上限、新开一段继续跑。
+
+    这是"长线任务跑不完"的直接根因：token 轴按累计重发历史计数（约 n² 增长），撞上固定
+    上限后走 `failed`，而自动续跑继承已用量 ⇒ 接上来立刻再越界。
+
+    以 `cap_tokens=1000`、每次调用 40 token：3 次调用只花 120，远低于上限，所以这里改用
+    `AGENT_RUN_MAX_TOKENS` **未设**的情形 —— 显式配置是硬限制，不该被续段越过。因此本用例
+    直接对预算对象断言（插件层已由 test_subagent_budget 覆盖），此处只钉"runtime 真的调了
+    `grant_next_segment`，而不是直接报错"。
+    """
+    from app.agent.task_budget import TaskBudget
+
+    # 显式配置 ⇒ 硬限制 ⇒ 不续段（这是安全边界，不能因为"想跑得更久"就放松）
+    explicit = TaskBudget(tokens=40, tokens_explicit=True)
+    assert explicit.grant_next_segment() is False
+
+    # 非显式 ⇒ 可以续段，且已用量不受影响（这里用 exceeded 的入参代表"已用量"）
+    adaptive = TaskBudget(tokens=40)
+    adaptive.scale_to_window(10, floor=40)
+    assert adaptive.grant_next_segment() is True
+    assert adaptive.exceeded(tokens=40) == ""

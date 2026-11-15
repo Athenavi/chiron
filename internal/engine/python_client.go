@@ -362,6 +362,20 @@ type PythonEvent struct {
 	// 任何一段漏字段都只在最后一段表现为"某个字段莫名其妙没了"。
 	Revision int `json:"revision,omitempty"`
 
+	// ── ask_user 的结构化提问（`type="ask"`）──
+	//
+	// **必须在网关侧声明**，理由与上面 Revision 完全相同：submit_handler 转发时是
+	// `Data: evt`（本结构体），未声明的字段在重新序列化那一刻就消失了。
+	// 此前这两个字段都没有声明 ⇒ 引擎明明发了 `options` / `allow_free_text`，前端
+	// `d.options` 永远读到 undefined：提问卡片只剩一个问题标题，没有可点的建议答案，
+	// 用户只能手打 —— "结构化提问"退化成一句普通的话。
+	//
+	//: 建议答案（引擎 `AgentEvent.options`）。空 = 只允许自由输入。
+	Options []string `json:"options,omitempty"`
+	//: 有选项时是否仍允许自由输入（缺省 = 允许）。用指针：`false` 是**有意义的值**
+	//: （引擎明确要求只能点选项），`bool + omitempty` 会把它吞掉，前端就退回成"允许自由输入"。
+	AllowFreeText *bool `json:"allow_free_text,omitempty"`
+
 	// ── 子 Agent 进度事件（type 前缀 "subagent."，见 python-engine/app/subagent/）──
 	// 这些字段让前端能按 run_id 建树、并按 depth/parent_run_id 还原层级；
 	// 主对话事件不带这些字段（omitempty 保证不污染既有帧）。

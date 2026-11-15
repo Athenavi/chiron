@@ -26,18 +26,27 @@ import os
 import time
 from dataclasses import dataclass, field
 
-#: 主 Agent 步数上限：一轮里 20 次工具调用是常态，60 足够跑完多轮工具链
-DEFAULT_MAX_STEPS = 60
-#: 主 Agent token 上限：只拦"明显失控"（正常长任务在数十万 token 量级）。
+#: 主 Agent 步数上限：一轮里 20 次工具调用是常态，长任务一条工具链跑到上百步很常见。
+#: 60 会在"轮次还有富余"时先见底，表现与"轮数太少"完全一样（任务没做完就报
+#: `budget_exceeded:steps`）。200 仍能拦住真正的失控（每轮 4 次 × 50 轮 = 200）。
+DEFAULT_MAX_STEPS = 200
+#: 主 Agent token 上限的**地板值**（不是固定值）。
 #:
-#: 这是**下限**，不是固定值：主 Agent 的实际默认值由 runtime 按模型窗口算
-#: （`窗口 × 轮数 / 2`，见 `runtime.run` 的 0.4b 段）。固定 400k 对 128K 窗口的模型
-#: 只够 2–3 轮 —— 每轮都要重发整段上下文，长任务因此报 `budget_exceeded:tokens`
-#: 停下，表现和"轮数太少"完全一样。子 Agent 仍用这个固定值（它跑得短）。
+#: 主 Agent 的实际默认值由 :meth:`TaskBudget.scale_to_window` 按模型窗口算
+#: （窗口 × 3）。固定 400k 对 128K 窗口的模型只够 2–3 轮 —— 每轮都要重发整段上下文，
+#: 长任务因此报 `budget_exceeded:tokens` 停下。子 Agent 仍以这个量级起步。
 DEFAULT_MAX_TOKENS = 400_000
-#: token 轴的上限封顶。窗口联动后可能算出很大的数（50 轮 × 半个 128K 窗口 = 3.2M），
+#: token 轴的上限封顶。窗口联动后可能算出很大的数（1M 窗口 × 3 = 3M），
 #: 但预算的职责是"拦明显失控"而不是"精确计费"—— 封顶保证失控仍能被拦住。
 DEFAULT_MAX_TOKENS_CEILING = 8_000_000
+#: token 轴的默认上限 = **模型窗口 × 这个倍数**。
+#:
+#: 1 ⇒ 一轮都跑不完（每轮都要重发整段历史，单轮 input 就可能接近窗口）；
+#: 3 ⇒ 约 3–4 轮的净消耗，配合下面的续段机制足以跑完长任务。
+TOKENS_PER_WINDOW = 3
+#: 越界续段的**段数上限**。token 撞线只抬上限、不动已用量，新开一段继续跑；
+#: 8 段足够覆盖超长任务，同时保证真正的失控（无限循环烧钱）仍会被停下。
+MAX_TOKEN_SEGMENTS = 8
 #: wall 默认不限：该不该限时由调用方 / 网关的回合超时决定，引擎侧不重复限制
 DEFAULT_MAX_SECONDS = 0
 #: 成本默认不限：计价口径随 provider 变，交给上层显式传
@@ -52,12 +61,29 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_set(name: str) -> bool:
+    """环境变量是否**显式给了可解析的值**（空串 / 非法值都算"没配"）。
+
+    为什么需要它：``AGENT_RUN_MAX_TOKENS=0`` 的语义是"该轴不限"，而"没配"要回落默认值。
+    两者在 ``int`` 结果上都是 0 —— 只看数值会把用户的显式关闭当成没配，于是回落到默认
+    值，等于用户根本关不掉这一轴。
+    """
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return False
+    try:
+        int(raw)
+    except ValueError:
+        return False
+    return True
+
+
 @dataclass
 class TaskBudget:
     """一次 agent run 的预算（每轴 0 = 该轴不限）。"""
 
     #: 工具调用总次数上限。**dataclass 默认 0（不限）**，由 :func:`from_env` 决定默认值：
-    #: 主 Agent 60、子 Agent 0（子 Agent 的步数由 `max_turns` 与看门狗管，不需要这一轴）。
+    #: 主 Agent 200、子 Agent 0（子 Agent 的步数由 `max_turns` 与看门狗管，不需要这一轴）。
     steps: int = 0
     turns: int = 0
     tokens: int = DEFAULT_MAX_TOKENS
@@ -65,12 +91,77 @@ class TaskBudget:
     cost: float = DEFAULT_MAX_COST
     started_at: float = field(default_factory=time.time)
 
+    #: token 轴的续段步长（由 :meth:`scale_to_window` 固定为**模型窗口**）。
+    #:
+    #: 步长必须与"当前上限"解耦：每次续段都按窗口抬一截，而不是按当前上限成倍放大 ——
+    #: 否则 8 段下来是 `窗口 × 2^8` 的指数膨胀，预算就不再是闸门。
+    token_step: int = 0
+    #: 已续段数（上限 :data:`MAX_TOKEN_SEGMENTS`）。只用于"段数用完就真的停"。
+    segments: int = 0
+    #: token 上限是否来自**显式配置**（`AGENT_RUN_MAX_TOKENS` 或调用方参数）。
+    #:
+    #: 显式配置是**硬限制**：自适应（:meth:`scale_to_window`）与续段
+    #: （:meth:`grant_next_segment`）都不越过它 —— 否则把它悄悄放大等于它没生效。
+    tokens_explicit: bool = False
+
     @property
     def enabled(self) -> bool:
         return bool(self.steps or self.turns or self.tokens or self.wall or self.cost)
 
     def elapsed(self) -> float:
         return time.time() - self.started_at
+
+    def scale_to_window(self, window: int, *, floor: int = DEFAULT_MAX_TOKENS) -> None:
+        """按**模型窗口**放大 token 轴（只放大、不缩小；显式配置时不越过它）。
+
+        为什么需要：token 轴按"累计重发历史"计费 —— 第 n 轮的 input 随 n 线性增长，
+        累计起来约呈 n²。固定 400k 在 5k→60k 的增长里跑到第 12–15 轮就撞线，而任务
+        还有一半（`max_turns=40`）没跑。窗口自适应让"能跑多少轮"跟着模型的实际容量走：
+        1M 窗口的模型得到 3M，128k 的模型仍是地板值 —— 小窗口不会被放大。
+
+        ``floor`` 是该轴的**地板值**，由调用方给：主 Agent 400k、子 Agent 200k。
+        不要在这里硬编码主 Agent 的值 —— 那会把子 Agent 更紧的额度悄悄放宽一倍。
+
+        上限来源（取最小）：窗口 × :data:`TOKENS_PER_WINDOW`、
+        :data:`DEFAULT_MAX_TOKENS_CEILING`、显式配置。
+        """
+        if window <= 0:
+            return
+        # 步长**固定在窗口值**上：续段不随上限成倍膨胀（见 token_step 的注释）。
+        self.token_step = max(1, int(window))
+        if self.tokens_explicit:
+            # 显式配置是硬限制：连"放大到地板值"都不做。
+            return
+        if not self.tokens:
+            # 0 = 该轴不限（用户显式关掉这一轴）：不要把它变成有限值。
+            return
+        target = min(
+            DEFAULT_MAX_TOKENS_CEILING,
+            max(int(floor), int(window * TOKENS_PER_WINDOW)),
+        )
+        if target > self.tokens:
+            self.tokens = target
+
+    def grant_next_segment(self) -> bool:
+        """token 轴撞线时**开下一段**：只抬上限、不动已用量。
+
+        已用量保持累加是计费口径 —— 清零会让网关少扣费（`_tokens_spent()` 同时喂
+        预算判定与 `budget.tokens.used`）。
+
+        返回 True = 已抬上限、可以继续跑；False = 不该续（该轴不限 / 显式硬限制 /
+        段数用尽 / 已到封顶）。
+        """
+        if not self.tokens or self.tokens_explicit:
+            return False
+        if self.segments >= MAX_TOKEN_SEGMENTS:
+            return False
+        step = self.token_step or DEFAULT_MAX_TOKENS
+        target = min(DEFAULT_MAX_TOKENS_CEILING, self.tokens + step)
+        if target <= self.tokens:
+            return False
+        self.tokens = target
+        self.segments += 1
+        return True
 
     def exceeded(
         self, *, steps: int = 0, turns: int = 0, tokens: int = 0, cost: float = 0.0
@@ -139,11 +230,26 @@ def from_env(
     （单次调用的 max output / 每次提交的默认回合数），同名不同义会让共享 env 的部署
     把引擎的 run 预算顶成"单次输出上限"（M20）。steps / seconds / cost 三轴只由引擎读，
     不与网关撞名，因此保留原名 —— 改名要精确到"真正会撞的那两个"。
+
+    **显式配置是硬限制**：函数参数给了非零值，或环境变量给了可解析的值（**含 0**），
+    都会把 ``tokens_explicit`` 置位 —— 于是窗口自适应与续段都不会越过它。``=0`` 仍然
+    保持"该轴不限"的语义（不是"用默认"）。
     """
+    env_tokens = f"{prefix}_RUN_MAX_TOKENS"
+    explicit_tokens = bool(tokens) or _env_set(env_tokens)
+    # 显式 0（"不限"）必须原样保留：`int(tokens or 0) or _env_int(...)` 会把 0 当"没配"
+    # 回落默认值，用户就再也关不掉这条轴。
+    if tokens:
+        tokens_value = int(tokens)
+    elif _env_set(env_tokens):
+        tokens_value = _env_int(env_tokens, default_tokens)
+    else:
+        tokens_value = default_tokens
     return TaskBudget(
         steps=int(steps or 0) or _env_int(f"{prefix}_MAX_STEPS", default_steps),
         turns=int(turns or 0) or _env_int(f"{prefix}_RUN_MAX_TURNS", 0),
-        tokens=int(tokens or 0) or _env_int(f"{prefix}_RUN_MAX_TOKENS", default_tokens),
+        tokens=tokens_value,
         wall=int(seconds or 0) or _env_int(f"{prefix}_MAX_SECONDS", DEFAULT_MAX_SECONDS),
         cost=float(cost or 0.0) or float(_env_int(f"{prefix}_MAX_COST", int(DEFAULT_MAX_COST))),
+        tokens_explicit=explicit_tokens,
     )

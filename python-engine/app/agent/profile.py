@@ -30,7 +30,11 @@ from app.tools.context import to_tenant_int
 logger = logging.getLogger(__name__)
 
 # ── 默认值（与设计文档 §3.4/§7 一致）──
-DEFAULT_MAX_TURNS = 5
+#: 子 Agent 默认回合数。5 太低：子 Agent 的典型任务是"读几个文件 → 改一处 → 跑一遍验证"，
+#: 光定位就要 3–5 轮，第 5 轮往往正处在"刚看清问题、还没动手"的位置 —— 表现是子 Agent
+#: 交回一段"我发现了 X，建议你…"而不是做好的结果，父 Agent 还得自己再做一遍。
+#: 15 覆盖常规委派；真正的失控由 `SubAgentRunner` 的 clamp 与注册表看门狗兜住。
+DEFAULT_MAX_TURNS = 15
 DEFAULT_TIMEOUT_SECONDS = 120
 DEFAULT_MAX_DEPTH = 1            # 默认禁止子 Agent 再委派（对标 Claude Code 默认不给 Agent 工具）
 DEFAULT_OUTPUT_MAX_CHARS = 2000  # L2 回传父上下文的上限

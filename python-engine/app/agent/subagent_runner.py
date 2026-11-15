@@ -742,6 +742,8 @@ class SubAgentRunner:
             content=task,
             system_prompt=system_prompt,
             llm_config=(spec.llm_config() if spec else {}) | ({"mode": mode} if mode else {}),
+            # 无 profile 时的兜底 30 轮（有 profile 时用 `spec.max_turns`，其默认值见
+            # profile.DEFAULT_MAX_TURNS）；30 是 clamp 上限，防失控。
             max_turns=max(1, min(max_turns or (spec.max_turns if spec else 30), 30)),
             subagent_depth=child_depth,
         )
@@ -880,6 +882,20 @@ class SubAgentRunner:
         _seg_started = time.time()
         status = "completed"
         budget = self._budget
+        # token 轴随模型窗口自适应（与主 Agent 同一套规则，见 TaskBudget.scale_to_window）。
+        #
+        # 200k 的地板值同样按"累计重发历史"计费：一个 15 轮的委派里，输入从 5k 涨到 40k，
+        # 累计就到 300k+ —— 子 Agent 会在"刚看清问题"的第 10 轮附近撞线，父 Agent 只收到
+        # 一句 `budget_exceeded:tokens`。窗口自适应只放大不缩小，小窗口仍是 200k 地板。
+        if budget is not None:
+            from app.agent import model_window as _model_window
+            from app.subagent.budget import DEFAULT_MAX_TOKENS as _SUB_TOKENS
+
+            _sub_model = str((getattr(child, "llm_config", {}) or {}).get("model") or "")
+            _sub_window = (
+                _model_window.cached_window(_sub_model) if _sub_model else None
+            ) or _model_window.DEFAULT_CONTEXT_WINDOW
+            budget.scale_to_window(_sub_window, floor=_SUB_TOKENS)
         ctx_snapshot = _snapshot_context()
         # ── 独立 wall 定时器：与"是否产出事件"无关 ──
         #

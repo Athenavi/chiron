@@ -136,7 +136,8 @@ class TestAgentTask:
     def test_parse_defaults(self):
         task = AgentTask.parse({})
         assert task.id == ""
-        assert task.max_turns == 10
+        # 与网关 DefaultMaxTurns 对齐（此前是 10 —— 任何没走到网关默认值的路径 10 轮就停）
+        assert task.max_turns == 50
 
 
 class TestConvertTools:
