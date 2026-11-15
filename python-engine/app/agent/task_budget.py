@@ -163,6 +163,25 @@ class TaskBudget:
         self.segments += 1
         return True
 
+    def carry_segments(self, used: int) -> None:
+        """从快照继承**已用段数**（续跑/接管路径调用）。
+
+        为什么段数也要跨续跑：续段是"撞线时放宽 per-run 额度"，而
+        :data:`MAX_TOKEN_SEGMENTS` 是这个放宽动作的闸门。预算对象每次 run 新建、
+        :attr:`segments` 默认归零 —— 不继承的话，"崩溃 → 续跑"就能把 8 段重新领一遍，
+        而续跑次数本身不限 ⇒ 段数上限等于不存在，token 轴又回到"没有任何上限"。
+
+        ``used`` 先夹进 ``[0, MAX_TOKEN_SEGMENTS]``：快照里的 ``usage`` 是 JSONB，
+        人工修数据就能写歪；一个超大的段数会让这个 run **一段都领不到**，
+        而那是"白扣额度"，与"白送额度"是同一类错误的两个方向。
+        取 ``max`` 是为了不与"本段已经领过的段"互相抵消。
+        """
+        try:
+            carried = int(used)
+        except (TypeError, ValueError):
+            return
+        self.segments = max(self.segments, min(max(carried, 0), MAX_TOKEN_SEGMENTS))
+
     def exceeded(
         self, *, steps: int = 0, turns: int = 0, tokens: int = 0, cost: float = 0.0
     ) -> str:

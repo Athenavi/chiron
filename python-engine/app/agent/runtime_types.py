@@ -18,6 +18,15 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+#: 单次 run 的回合数上限默认值 —— **唯一的默认来源**。
+#:
+#: 必须与网关 `internal/api/helpers.go` 的 `DefaultMaxTurns` 一致：网关在请求里显式下发
+#: 这个值，但"直连引擎"（内部调用、测试、reconciler 自动续跑重建 task）不走网关，只能
+#: 靠这里的兜底。此前默认值散落在三处且互不一致（本文件 50 / `resume.rebuild_task` 的
+#: `or 5` / 网关 agents.go 的 5），等于"同一条长任务换个入口就只跑 5 轮" —— 而 5 轮
+#: 之后 checkpoint 续跑会被夹到 `max_turns-1`，整套续跑基建形同作废。
+DEFAULT_MAX_TURNS = 50
+
 
 @dataclass
 class AgentTask:
@@ -38,9 +47,10 @@ class AgentTask:
     llm_config: dict[str, Any] = field(default_factory=dict)
     #: 回合数上限。默认值与网关 `DefaultMaxTurns`（internal/api/helpers.go）保持一致 ——
     #: 网关在请求里总会显式下发这个值，此处的默认只是"直接构造 AgentTask"时的兜底
-    #: （引擎内部调用、测试）。此前这里（以及 `parse`）是 5/10：任何没走到网关默认值的
-    #: 路径都会在 5–10 轮内停下，而模型还远没做完 —— 表现为"任务跑一半就没声了"。
-    max_turns: int = 50
+    #: （引擎内部调用、测试、reconciler 续跑重建）。此前这里（以及 `parse`）是 5/10：任何
+    #: 没走到网关默认值的路径都会在 5–10 轮内停下，而模型还远没做完 —— 表现为"任务跑
+    #: 一半就没声了"。
+    max_turns: int = DEFAULT_MAX_TURNS
     subagent_depth: int = 0  # S3: 委派深度（subagent 递归限制，MAX_DEPTH=3）
     #: M15b：本次 run 归属的**任务线根**（`subagent_runs.root_run_id`，见权威基线）。
     #: 只有子 Agent 有它 —— 线账统计的是委派树的 token（主 run 自己那一份不在 `subagent_runs`
@@ -95,7 +105,7 @@ class AgentTask:
             history=data.get("history", []),
             tools=data.get("tools", []),
             llm_config=data.get("llm_config", {}),
-            max_turns=data.get("max_turns", 50),
+            max_turns=data.get("max_turns", DEFAULT_MAX_TURNS),
             attachments=data.get("attachments") or [],
         )
 

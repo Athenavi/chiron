@@ -26,6 +26,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, cast
 
+from app.agent.runtime_types import DEFAULT_MAX_TURNS
 from app.tools.context import to_tenant_int
 
 if TYPE_CHECKING:
@@ -66,6 +67,13 @@ class ResumeState:
     #: 上一段已消耗的墙钟（秒）。快照只在**回合末**落盘，所以崩溃前那半回合的时间不在里面
     #: —— 与 token 轴同一方向的偏差（继承的是**少算**的那份，宁可少继承，也不误停一个正常 run）。
     wall_seconds: int = 0
+    #: 上一段已经用掉几个 **token 续段**（`TaskBudget.segments`）。
+    #:
+    #: 为什么要继承：续段是"撞线时抬上限、新开一段继续跑"，本身就是在放宽 per-run 额度。
+    #: 段数上限（`MAX_TOKEN_SEGMENTS`）是这个放宽动作的闸门 —— 而预算对象每次 run 都是新建的，
+    #: 段数默认归零。不继承的话，"崩溃 → 续跑"就能把 8 段重新领一遍，续跑次数不限就等于
+    #: 段数不限，token 轴上又回到"没有任何上限"（这正是 M15e 修掉的那个洞在续段机制里的复发）。
+    token_segments: int = 0
     #: M19：这条 run 链涉及过的网关 turn id（见 `checkpoint.RunCheckpoint.turn_ids`）。
     #: 续跑段必须继承它 —— 网关的对账 job 靠"完整集合"扣掉已经计过费的回合。
     turn_ids: tuple[str, ...] = ()
@@ -173,6 +181,7 @@ async def load_resume_state(
         output_tokens=_usage_int(usage_map, "output_tokens"),
         cached_tokens=_usage_int(usage_map, "cached_tokens"),
         wall_seconds=_usage_int(usage_map, "wall_seconds"),
+        token_segments=_usage_int(usage_map, "token_segments"),
         turn_ids=turn_ids,
         turn_ids_truncated=bool(snapshot.get("turn_ids_truncated")),
         done_tools=done,
@@ -191,6 +200,26 @@ def _usage_int(usage_map: dict[str, Any], key: str) -> int:
         return max(0, int(usage_map.get(key) or 0))
     except (TypeError, ValueError):
         return 0
+
+
+def _snapshot_max_turns(meta: dict[str, Any]) -> int:
+    """读快照里的 `max_turns`；缺失 / 非正 / 脏值一律回落 :data:`DEFAULT_MAX_TURNS`。
+
+    为什么必须**显式判正**，不能写成 `int(x or 0) or DEFAULT`：`or` 只挡得住 0，挡不住负数。
+    而负的 `max_turns` 比"少了"更糟 —— `runtime.run` 的循环是 `range(start_turn, max_turns)`，
+    负数直接**一轮都不跑**，run 静默收尾且没有任何事件解释原因；`start_turn` 的夹取也会一起
+    失效（`max(max_turns-1, 0)` 把上界压成 0）。这正是"任务跑一半就没声了"最难查的一种。
+
+    历史背景：这里曾经硬编码 `or 5`，`599a684` 把全局默认提到 50 时漏改了这一处，于是自动
+    续跑的现场只跑 5 轮 —— 而 `start_turn` 被夹到 `max_turns-1`，一个已经跑了 20 轮的现场
+    接上来直接 0 轮可用，判定成 `budget_exceeded:turns`。续跑是崩溃恢复的唯一路径，
+    "接上来就立刻停"等于这条路径彻底失效。
+    """
+    try:
+        value = int(meta.get("max_turns") or 0)
+    except (TypeError, ValueError):
+        return DEFAULT_MAX_TURNS
+    return value if value > 0 else DEFAULT_MAX_TURNS
 
 
 def merge_user_message(
@@ -349,7 +378,7 @@ def rebuild_task(
         system_prompt=str(meta.get("system_prompt") or ""),
         llm_config=dict(llm_config),
         workbench_context=dict(meta.get("workbench_context") or {}),
-        max_turns=int(meta.get("max_turns") or 0) or 5,
+        max_turns=_snapshot_max_turns(meta),
         subagent_depth=int(meta.get("subagent_depth") or 0),
         run_token=run_token,
     )

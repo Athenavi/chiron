@@ -164,6 +164,9 @@ async def test_resume_state_inherits_the_token_axes(monkeypatch):
                 "cached_tokens": 500,
                 "tool_steps": 7,
                 "wall_seconds": 41,
+                # token 续段：续段是"撞线时放宽 per-run 额度"，段数上限是这道放宽的闸门。
+                # 不继承 ⇒ "崩溃 → 续跑"能把 8 段重新领一遍，段数上限等于不存在。
+                "token_segments": 3,
             }
         ),
     )
@@ -174,6 +177,7 @@ async def test_resume_state_inherits_the_token_axes(monkeypatch):
     assert (state.input_tokens, state.output_tokens) == (12_000, 3_400)
     assert state.cached_tokens == 500
     assert (state.tool_steps, state.wall_seconds) == (7, 41)
+    assert state.token_segments == 3
 
 
 async def test_legacy_snapshot_without_usage_starts_at_zero(monkeypatch):
@@ -185,6 +189,7 @@ async def test_legacy_snapshot_without_usage_starts_at_zero(monkeypatch):
     assert state is not None
     assert (state.input_tokens, state.output_tokens, state.cached_tokens) == (0, 0, 0)
     assert (state.tool_steps, state.wall_seconds) == (0, 0)
+    assert state.token_segments == 0
 
 
 # ── M19：run 链的网关 turn 集合（网关按-run 对账的依据）──────────────────
@@ -712,6 +717,38 @@ def test_rebuild_task_requires_task_meta():
         )
         is None
     )
+
+
+def test_rebuild_task_默认轮次与网关一致():
+    """快照里没有 `max_turns` 时，重建出来的 task 必须取**全局默认**，不是旧的那个 5。
+
+    这条路径是自动续跑（`_auto_resume_runner`）唯一的现场来源：回落 5 意味着崩溃后接上来
+    只跑 5 轮；而 `start_turn` 被夹到 `max_turns-1`，一个已经跑了 20 轮的现场接上来直接
+    0 轮可用，判定成 `budget_exceeded:turns` —— 续跑等于没续。
+    """
+    from app.agent.resume import rebuild_task
+    from app.agent.runtime_types import DEFAULT_MAX_TURNS
+
+    assert DEFAULT_MAX_TURNS == 50, "引擎默认须与网关 DefaultMaxTurns 一致"
+
+    for meta_turns in (None, 0, -1):
+        meta: dict[str, object] = {"llm_config": {}}
+        if meta_turns is not None:
+            meta["max_turns"] = meta_turns
+        task = rebuild_task(
+            tenant_id=1, session_id="s", snapshot={"task_meta": meta}, run_token="x"
+        )
+        assert task is not None
+        assert task.max_turns == DEFAULT_MAX_TURNS
+
+    # 快照里带值 ⇒ 原样继承（用户/Agent 显式配过的轮次不许被默认值改掉）
+    task = rebuild_task(
+        tenant_id=1,
+        session_id="s",
+        snapshot={"task_meta": {"llm_config": {}, "max_turns": 120}},
+        run_token="x",
+    )
+    assert task is not None and task.max_turns == 120
 
 
 # ── M7：巡检顺带回收过期的人工介入现场 ──────────────────────────────────

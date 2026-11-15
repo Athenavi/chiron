@@ -157,3 +157,49 @@ def test_未配_tokens_时不算显式配置(monkeypatch):
     budget = from_env()
     assert budget.tokens_explicit is False
     assert budget.tokens == DEFAULT_MAX_TOKENS
+
+
+# ── 段数跨续跑继承 ────────────────────────────────────────────────────────────
+#
+# 续段是"撞线时放宽 per-run 额度"，段数上限是这个放宽动作的闸门。预算对象每次 run 都新建、
+# 段数默认归零 —— 不继承的话"崩溃 → 续跑"就能把 8 段重新领一遍，而续跑次数本身不限，
+# 于是段数上限形同不存在：token 轴又回到"可以无限续"的状态。
+
+
+def test_carry_segments_继承已用段数():
+    from app.agent.task_budget import MAX_TOKEN_SEGMENTS
+
+    budget = TaskBudget(tokens=1000)
+    budget.scale_to_window(1000, floor=1000)
+    budget.carry_segments(3)
+    assert budget.segments == 3
+    # 只剩 MAX-3 段可领，领完就停
+    for _ in range(MAX_TOKEN_SEGMENTS - 3):
+        assert budget.grant_next_segment() is True
+    assert budget.segments == MAX_TOKEN_SEGMENTS
+    assert budget.grant_next_segment() is False, "继承的段数必须真的计入上限"
+
+
+def test_carry_segments_不吞掉本段已领的段():
+    budget = TaskBudget(tokens=1000)
+    budget.scale_to_window(1000, floor=1000)
+    assert budget.grant_next_segment() is True  # 本段先领了 1 段
+    budget.carry_segments(0)
+    assert budget.segments == 1, "继承值更小不该把已领的段数抹掉"
+
+
+def test_carry_segments_夹住脏数据():
+    """`usage` 是 JSONB，人工能写歪：超上限的段数会让这个 run 一段都领不到（白扣额度）。"""
+    from app.agent.task_budget import MAX_TOKEN_SEGMENTS
+
+    budget = TaskBudget(tokens=1000)
+    budget.scale_to_window(1000, floor=1000)
+
+    budget.carry_segments(-5)
+    assert budget.segments == 0
+
+    budget.carry_segments(10**6)
+    assert budget.segments == MAX_TOKEN_SEGMENTS
+
+    budget.carry_segments("not-a-number")  # type: ignore[arg-type]
+    assert budget.segments == MAX_TOKEN_SEGMENTS, "脏值不该改动已有段数"

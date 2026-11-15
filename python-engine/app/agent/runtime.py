@@ -2264,6 +2264,19 @@ class AgentRuntime:
                 resumed_cached_tokens = int(
                     getattr(self._resumed_from_checkpoint, "cached_tokens", 0) or 0
                 )
+                # token 续段：**已用掉的段数也要继承**。
+                #
+                # 续段就是"撞线时放宽 per-run 额度"，而段数上限（`MAX_TOKEN_SEGMENTS`）是这个
+                # 放宽动作的闸门。预算对象每次 run 新建、段数默认归零 —— 不继承的话，
+                # "崩溃 → 续跑"能把 8 段重新领一遍，而续跑次数本身不限 ⇒ 段数上限形同不存在，
+                # token 轴又回到 `599a684` 之前那个"没有任何上限"的状态（只是绕了一圈）。
+                #
+                # 快照只在回合末覆写，进程崩在回合中途时已用量偏小，段数同样偏小 ——
+                # `carry_segments` 取 `max` 且夹进 `[0, MAX_TOKEN_SEGMENTS]`，
+                # 既不去抵消本段已领的段，也不让脏数据把额度清零。
+                budget.carry_segments(
+                    int(getattr(self._resumed_from_checkpoint, "token_segments", 0) or 0)
+                )
                 # wall 轴：把本段的起点拨回"接管时刻减去上一段已花的时间"。`budget.wall`
                 # 默认 0（不限），所以这只影响显式设了 `AGENT_MAX_SECONDS` 的部署 ——
                 # 但对它们来说，"每次接管重拨一次表"与 tokens 是同一个洞。
@@ -3114,6 +3127,9 @@ class AgentRuntime:
                             "tool_steps": self._tool_steps,
                             # wall 轴：本段用时 + 继承来的用时（`budget.started_at` 已被拨回）
                             "wall_seconds": int(budget.elapsed()),
+                            # token 续段：已用掉的段数（见 `ResumeState.token_segments`）。
+                            # 不落盘的话续跑会把 8 段重新领一遍 —— 段数上限就形同不存在。
+                            "token_segments": int(budget.segments),
                         },
                     )
 
@@ -3555,6 +3571,14 @@ class AgentRuntime:
                                         locals().get("budget").elapsed()
                                         if locals().get("budget") is not None
                                         else 0
+                                    ),
+                                    # 与回合末那份同口径：取消落盘也要带上已用段数，
+                                    # 否则"取消 → 续跑"就是一条重置段数的捷径。
+                                    "token_segments": int(
+                                        getattr(
+                                            locals().get("budget"), "segments", 0
+                                        )
+                                        or 0
                                     ),
                                 },
                             )

@@ -290,3 +290,39 @@ async def test_token_wall_opens_a_new_segment_instead_of_failing(monkeypatch) ->
     adaptive.scale_to_window(10, floor=40)
     assert adaptive.grant_next_segment() is True
     assert adaptive.exceeded(tokens=40) == ""
+
+
+async def test_takeover_carries_and_persists_token_segments(monkeypatch) -> None:
+    """续段计数必须**双向**守恒：读快照继承进来，落盘再写回去。
+
+    只做一半都不是守恒 —— 继承但不落盘，第二段续跑又从头领；落盘但不继承，读进来就是废纸。
+    漏掉的后果是段数上限（`MAX_TOKEN_SEGMENTS`）形同不存在：续段本身就是"放宽 per-run 额度"
+    的动作，而"崩溃 → 续跑"能把 8 段重新领一遍、续跑次数又不受限 ⇒ token 轴重新变成无上限。
+    """
+    from app.agent.task_budget import MAX_TOKEN_SEGMENTS
+
+    gateway = _ScriptedGateway(tool_turns=1)  # 回合末落盘只发生在**含工具调用**的回合
+    resume = ResumeState(
+        messages=[{"role": "user", "content": "继续"}],
+        input_tokens=10,
+        token_segments=MAX_TOKEN_SEGMENTS,  # 上一段已经把 8 段全领完了
+    )
+
+    _events, saved, _spy = await _drive(
+        monkeypatch, resume=resume, cap_tokens=10**9, gateway=gateway, max_turns=2
+    )
+
+    assert saved, "回合末必须落盘（否则下一段续跑读不到段数）"
+    assert saved[-1]["usage"]["token_segments"] == MAX_TOKEN_SEGMENTS
+
+
+async def test_run_without_resume_persists_zero_segments(monkeypatch) -> None:
+    """没有现场 ⇒ 段数从 0 起算，落盘也是 0（不能让正常 run 凭空背一份已用段数）。"""
+    gateway = _ScriptedGateway(tool_turns=1)
+
+    _events, saved, _spy = await _drive(
+        monkeypatch, resume=None, cap_tokens=10**9, gateway=gateway, max_turns=2
+    )
+
+    assert saved
+    assert saved[-1]["usage"]["token_segments"] == 0

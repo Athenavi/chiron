@@ -216,6 +216,23 @@ SELECT id::text, name, COALESCE(description,''), COALESCE(system_prompt,''),
    AND (kind IS NULL OR kind = 'chat')  -- 子 Agent Profile（kind='subagent'）不进入对话 Agent 列表
  ORDER BY created_at DESC`
 
+// applyAgentDefaults 补齐 Agent 的可选字段默认值（就地修改）。
+//
+// `MaxTurns` 的默认值必须与 `/submit` 的默认回合数、引擎侧 `DEFAULT_MAX_TURNS` 同源。
+// 这里曾经硬编码 5：新建的 Agent 会被**落库成** 5 轮，而它的 `max_turns` 又经
+// `agentContextPayload` 下发给引擎、覆盖掉全局默认 —— 于是"在对话里选了这个 Agent"
+// 就只跑 5 轮；且 5 轮后 checkpoint 续跑被夹到 `max_turns-1`，续跑也接不上。
+// 落库值是**持久**的，所以这不是"兜底偶尔不生效"，而是"这条 Agent 从此被钉死在 5 轮"，
+// 用户唯一的自救办法是手动 PATCH 一个更大的值。
+func applyAgentDefaults(a *Agent) {
+	if a.MaxTurns <= 0 {
+		a.MaxTurns = DefaultMaxTurns
+	}
+	if a.TimeoutSeconds <= 0 {
+		a.TimeoutSeconds = 120
+	}
+}
+
 // Create 新建一个 Agent（绑定当前租户）。
 func (h *AgentHandler) Create(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
@@ -238,12 +255,7 @@ func (h *AgentHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if len(llmJSON) == 0 || string(llmJSON) == "null" {
 		llmJSON = json.RawMessage("{}")
 	}
-	if body.MaxTurns <= 0 {
-		body.MaxTurns = 5
-	}
-	if body.TimeoutSeconds <= 0 {
-		body.TimeoutSeconds = 120
-	}
+	applyAgentDefaults(&body)
 
 	id, err := id.UUID()
 	if err != nil {

@@ -151,6 +151,39 @@ func TestAgentPluginNames_MatchesSkillNames(t *testing.T) {
 
 // ── contextIDList：多值 context 的读取口径（*_ids 优先，回退单值）──
 
+// ── applyAgentDefaults：新建 Agent 的默认轮次 ──
+//
+// 这条断言存在的理由：`max_turns` 会被**落库**，之后经 `agentContextPayload` 下发给引擎，
+// 覆盖掉引擎侧的全局默认。所以 Create 里的默认值写错，不是"兜底不生效"，而是把这条
+// Agent 永久钉死在那个数字上 —— 历史缺陷正是硬编码 5，任何新建的 Agent 都只跑 5 轮，
+// 且 5 轮后 checkpoint 续跑被夹到 `max_turns-1`、接不上。
+
+func TestApplyAgentDefaults_MaxTurnsUsesSharedDefault(t *testing.T) {
+	// 显式配过的不许被改
+	kept := Agent{MaxTurns: 120, TimeoutSeconds: 300}
+	applyAgentDefaults(&kept)
+	if kept.MaxTurns != 120 || kept.TimeoutSeconds != 300 {
+		t.Fatalf("显式配置被覆盖: %+v", kept)
+	}
+
+	// 未配（含脏的负数）⇒ 与 /submit、引擎侧同一个默认值
+	for _, turns := range []int{0, -1} {
+		a := Agent{MaxTurns: turns}
+		applyAgentDefaults(&a)
+		if a.MaxTurns != DefaultMaxTurns {
+			t.Errorf("MaxTurns=%d 应回落到 DefaultMaxTurns=%d，实得 %d",
+				turns, DefaultMaxTurns, a.MaxTurns)
+		}
+		if a.MaxTurns != 50 {
+			t.Errorf("DefaultMaxTurns 须与引擎侧 DEFAULT_MAX_TURNS 一致（50），实为 %d",
+				DefaultMaxTurns)
+		}
+		if a.TimeoutSeconds != 120 {
+			t.Errorf("TimeoutSeconds 应回落 120，实得 %d", a.TimeoutSeconds)
+		}
+	}
+}
+
 func TestContextIDList(t *testing.T) {
 	// 请求体经 DecodeJSON 后数组是 []any（真实链路），Go 侧手写的则是 []string。
 	// 两种都必须认，否则同一份 context 在两条路径上解析出不同结果。
