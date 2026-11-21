@@ -1,4 +1,0 @@
-# 文档断链基线（存量债务）：这些 docs/*.md 被引用但不在仓库里。
-# 由 `python scripts/check_doc_links.py --write-baseline` 生成；**只应缩小**。
-# 每清掉一条就删一行；新增引用不存在的文档会被守卫直接判失败（不要往这里加）。
-
