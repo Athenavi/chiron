@@ -18,12 +18,6 @@
 
 <!-- 贴你**实际跑过**的命令与结果，不要只写"测试通过"。 -->
 
-```bash
-go build -mod=mod ./... && go vet -mod=mod ./... && go test -mod=mod ./internal/...
-# 改过 .md 时：
-python scripts/check_doc_links.py && python scripts/check_md_tables.py && python scripts/check_source_encoding.py
-```
-
 ## 备注
 
 <!-- 取舍、明确没做的事、后续计划。 -->
